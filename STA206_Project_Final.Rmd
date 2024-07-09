@@ -1,0 +1,377 @@
+---
+title: "STA206_Project_bjewell"
+author: "Ben Jewell"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load in the abalone dataset
+# Loading the necessary libraries
+library(knitr)
+library(ggplot2)
+library(MASS)
+library(faraway)
+library(pls)
+library(car)
+library(glmnet)
+library(olsrr)
+
+rmspe<-function(y, yh) sqrt(mean((y-yh)^2)) #As provided by TA
+
+# Reading the dataset
+abalone = read.table('abalone.txt', header=FALSE, sep = ",")
+
+# Rename the columns of the dataset
+colnames(abalone) = c('Sex', 'Length', 'Diameter', 'Height', 'Whole_weight', 'Shucked_weight', 'Viscera_weight', 'Shell_weight', 'Rings')
+head(abalone)
+
+# Add an age column to get the age of all the abalones
+abalone$Age = abalone$Rings + 1.5
+abalone$Rings = NULL
+
+# Converting X2 into a factor
+abalone$Sex = as.factor(abalone$Sex)
+
+# Check how many M, F, I are there
+obs_level = table(abalone$Sex)
+obs_level
+
+# Summary of the dataset
+summary(abalone)
+head(abalone)
+```
+
+### Exploratory Data Analysis
+
+```{r}
+# Histograms for continuous variables
+par(mfrow=c(2, 3))
+hist(abalone$Length, main='Histogram of Length', xlab='Length')
+hist(abalone$Diameter, main='Histogram of Diameter', xlab='Diameter')
+hist(abalone$Height, main='Histogram of Height', xlab='Height')
+hist(abalone$Whole_weight, main='Histogram of Whole Weight', xlab='Whole Weight')
+hist(abalone$Shucked_weight, main='Histogram of Shucked Weight', xlab='Shucked Weight')
+hist(abalone$Viscera_weight, main='Histogram of Viscera Weight', xlab='Viscera Weight')
+hist(abalone$Shell_weight, main='Histogram of Shell Weight', xlab='Shell Weight')
+hist(abalone$Age, main='Histogram of Age', xlab='Age')
+```
+
+```{r}
+par(mfrow = c(1,2))
+# Boxplot for categorical variable 'Sex'
+boxplot(Age ~ Sex, data=abalone, main='Age by Sex', xlab='Sex', ylab='Age', col=rainbow(4))
+
+# Bar Chart
+barplot(table(abalone$Sex),col=rainbow(4),main='Abalone Sex: Bar Chart')
+```
+
+```{r}
+# Scatterplots for relationships
+pairs(~Length + Diameter + Height + Whole_weight + Shucked_weight + Viscera_weight + Shell_weight + Age, data=abalone, main="Scatterplot Matrix")
+```
+
+### Data Splitting: Training & Validation
+
+```{r}
+#Set seed to ensure our data is split the same each time
+set.seed(206)
+
+#Split the data into train and test data sets
+tv_split = sample(c(TRUE, FALSE), nrow(abalone), replace = TRUE, prob = c(0.7, 0.3))
+
+#Train Data
+abalone_t = abalone[tv_split, ]
+#Validation Data
+abalone_v = abalone[!tv_split, ]
+
+#unbind seed for future random procedures
+set.seed(NULL)
+```
+
+### Preliminary Model Fitting
+
+```{r}
+#Fitting first order model as starting point
+first_order = lm(Age ~ ., data = abalone_t)
+
+
+#Summary plots
+plot(first_order, which =1, sub.caption = '', main = 'First Order Initial Model')
+plot(first_order, which = 2, sub.caption = '', main = 'First Order Initial Model')
+```
+
+```{r}
+# Based on qq-plot and residual vs fitted, it seems to violate our normality assumptions
+MASS::boxcox(first_order)
+```
+
+```{r}
+# Use log transformation on response variable to see if it helps with our first-order model assumptions
+first_order_log = lm(log(Age) ~ ., data = abalone_t)
+summary(first_order_log)
+
+#Plotting diagnostic plots
+plot(first_order_log, which = 1:2, sub.caption = '', main = 'Log Transformed Initial Model')
+par(mfrow=c(1,2))
+plot(first_order_log, which = 4:5, sub.caption = '', main = 'Log Transformed Initial Model')
+```
+
+```{r}
+# Run the first order model again w/ transformed and subsetting case '2052'
+first_order_sub =lm(log(Age) ~ ., data = abalone_t, subset=setdiff(rownames(abalone), "2052"))
+summary(first_order_sub)
+plot(first_order_sub, which = c(1, 2), sub.caption = '', main = 'Log Model without Outlier')
+par(mfrow=c(1,2))
+plot(first_order_sub, which = c(4, 5), sub.caption = '', main = 'Log Model without Outlier')
+```
+
+```{r, echo = FALSE}
+library(car)
+# Calculate VIF for the model
+vif_scores = vif(first_order_log)
+
+# Display the VIF scores
+kable(vif_scores, caption = 'VIF scores of Log Transformed Model')
+
+# You can also check for VIF scores greater than a certain threshold, say 5 or 10
+kable(vif_scores[vif_scores > 9], col.names = 'VIF scores', caption = 'VIF scores > 10')
+```
+
+```{r}
+#Define the model with only the intercept, subsetting the influential case
+none_mod = lm(log(Age) ~ 1, data = abalone_t, subset=setdiff(rownames(abalone_t), "2052"))
+#Define the full model, subsetting the influential case
+full_mod = lm(log(Age) ~., data = abalone_t, subset=setdiff(rownames(abalone_t), "2052"))
+
+#Forward stepwise based on AIC
+stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="forward", k=2, trace = FALSE)
+
+#Forward stepwise based on BIC
+stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="forward", k=log(nrow(abalone_t)), trace = FALSE)
+```
+
+### Reattempting stepAIC removing whole weight from data set and recentering data
+
+```{r}
+#Reprocessing data to use indicator functions for later ridge regression
+
+#Training Data: Indicator functions & y variable log transformed
+abalone_idc_t = abalone_t
+abalone_idc_t$F = rep(0, nrow(abalone_idc_t))
+abalone_idc_t$F[which(abalone_t$Sex == 'F')] = 1
+abalone_idc_t$M = rep(0, nrow(abalone_idc_t))
+abalone_idc_t$M[which(abalone_t$Sex == 'M')] = 1
+abalone_idc_t$Sex = NULL
+abalone_idc_t$Age = log(abalone_idc_t$Age)
+
+#Validation Data: Indicator functions & y variable log transformed
+abalone_idc_v = abalone_v
+abalone_idc_v$F = rep(0, nrow(abalone_idc_v))
+abalone_idc_v$F[which(abalone_v$Sex == 'F')] = 1
+abalone_idc_v$M = rep(0, nrow(abalone_idc_v))
+abalone_idc_v$M[which(abalone_v$Sex == 'M')] = 1
+abalone_idc_v$Sex = NULL
+abalone_idc_v$Age = log(abalone_idc_v$Age)
+
+#Setting data as matrices for ridge regression later
+x_t_data = as.matrix(abalone_idc_t[,-8])
+y_t_data = as.matrix(abalone_idc_t[,8])
+x_v_data = as.matrix(abalone_idc_v[,-8])
+y_v_data = as.matrix(abalone_idc_v[,8])
+
+#Centering & Rescaling the data
+
+#Training Data: Rescaled, dropping `Whole_weight` from data
+abalone_rs_t = as.data.frame(scale(abalone_t[, -c(1, 5, 9)]))
+abalone_rs_t$M = abalone_idc_t$M
+abalone_rs_t$F = abalone_idc_t$F
+abalone_rs_t$Age = abalone_idc_t$Age
+
+#Validation Data: Rescaled, dropping `Whole_weight` from data
+abalone_rs_v = as.data.frame(scale(abalone_v[, -c(1, 5, 9)]))
+abalone_rs_v$M = abalone_idc_v$M
+abalone_rs_v$F = abalone_idc_v$F
+abalone_rs_v$Age = abalone_idc_v$Age
+
+#Setting data as matrices for ridge regression later
+x_ts_data = as.matrix(abalone_rs_t[,-9])
+y_ts_data = as.matrix(abalone_rs_t[,9])
+x_vs_data = as.matrix(abalone_rs_v[,-9])
+y_vs_data = as.matrix(abalone_rs_v[,9])
+```
+
+```{r}
+# Define the model with only the intercept, subsetting the influential case
+none_mod = lm(y_ts_data ~ 1, data = as.data.frame(x_ts_data), subset=setdiff(rownames(abalone), "2052"))
+
+# Define the full model, subsetting the influential case
+full_mod = lm(y_ts_data ~ ., data = as.data.frame(x_ts_data), subset=setdiff(rownames(abalone), "2052"))
+
+# Forward stepwise based on AIC
+stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="both", k = 2, trace = FALSE)
+
+# Forward stepwise based on BIC
+stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="both", k = log(nrow(abalone_t)), trace = FALSE)
+```
+
+```{r}
+#Our two AIC/BIC models
+aic_model = stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="both", k = 2, trace = FALSE)
+bic_model = stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="both", k = log(nrow(abalone_t)), trace = FALSE)
+
+summary(aic_model)
+anova(aic_model)
+summary(bic_model)
+anova(bic_model)
+```
+
+```{r}
+#Interaction attempt
+bic_intr_model = lm(formula = y_ts_data ~ . - Length - Viscera_weight + Shell_weight*Diameter + Shucked_weight*Diameter, data = as.data.frame(x_ts_data), subset = setdiff(rownames(abalone), "2052"))
+
+summary(bic_intr_model)
+anova(bic_intr_model)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aic_model, which = c(1,2), sub.caption = '', main = 'AIC selected Model')
+plot(aic_model, which = c(4,5), sub.caption = '', main = 'AIC selected Model')
+plot(bic_model, which = c(1,2), sub.caption = '', main = 'BIC selected Model')
+plot(bic_model, which = c(4,5), sub.caption = '', main = 'BIC selected Model')
+```
+
+### Ridge Regression GLMNET
+
+```{r}
+abalone.g = glmnet(x_t_data[-2502, ], y_t_data[-2502], alpha = 0)
+
+#Finding optimal lambda value
+crossv_model = cv.glmnet(x_ts_data[-2505, ], y_ts_data[-2505], alpha = 0)
+lambda_min = crossv_model$lambda.min
+lambda_min
+
+par(mfrow=c(1,2))
+plot(crossv_model)
+
+#Using our best optimal values remake our model
+abalone.g.best = glmnet(x_ts_data[-2505, ], y_ts_data[-2505], alpha = 0, lambda = lambda_min)
+coef(abalone.g.best)
+
+#Coefficients as lambda changes
+plot(abalone.g)
+abline(v = lambda_min, lty = 'dashed')
+```
+
+```{r}
+#Using our ridge regression model predict our validation dataset
+y.ridge_pred = predict(abalone.g, s = lambda_min, newx = x_v_data[-2502, ])
+
+#Get coefficients of multiple determination for ridge regession
+ssto = sum((y_v_data - mean(y_v_data))^2)
+sse = sum((y.ridge_pred - y_v_data)^2)
+c(ssto, sse)
+
+#Calculate R^2 and R_a^2 for ridge regression
+r_squared = 1 - (sse / ssto)
+r_adj_squared = 1 - ((nrow(x_v_data) - 1) / ((nrow(x_v_data) - length(coef(abalone.g.best))))) * (sse / ssto)
+c(r_squared, r_adj_squared)
+
+#Ridge Regression RMSPE score vs SSE/n
+rmspe(y_v_data, y.ridge_pred)^2
+sse / nrow(x_t_data)
+```
+
+```{r}
+ridge_residuals = y_v_data - y.ridge_pred
+plot(y.ridge_pred, ridge_residuals, xlab = 'Fitted Values', ylab = 'Residuals', main = 'Fitted Values vs Residuals for Ridge Regression')
+```
+
+Credit to Oliver & Johnnyheineken on Stat Exchange for providing AIC/BIC code for ridge regression: <https://stackoverflow.com/questions/63171921/is-there-a-way-in-r-to-determine-aic-from-cv-glmnet> <https://stackoverflow.com/questions/40920051/r-getting-aic-bic-likelihood-from-glmnet>
+
+```{r}
+#Algorithm to calculate AIC & BIC for ridge regression
+tLL = abalone.g.best$nulldev - deviance(abalone.g.best)
+
+1 - abalone.g.best$dev.ratio
+
+k = abalone.g.best$df
+n = abalone.g.best$nobs
+aic.ridge = - tLL + 2 * k + 2 * k * (k + 1) / (n - k - 1)
+bic.rdige = log(n) * k - tLL
+
+aic.ridge
+bic.rdige
+
+```
+
+### Dealing with Multi Collinearity
+
+```{r}
+#Gathering the significant stats for all our models
+
+press_aic = sum((aic_model$residuals/(1-influence(aic_model)$hat))^2)
+press_bic = sum((bic_model$residuals/(1-influence(bic_model)$hat))^2)
+press_intr_bic = sum((bic_intr_model$residuals/(1-influence(bic_intr_model)$hat))^2)
+
+cp.ridge = ((sse * (nrow(x_t_data) - length(coef(abalone.g.best)))) / sum(full_mod$residuals^2)) - nrow(x_t_data) + 2*length(coef(abalone.g.best))
+
+```
+
+Note that BIC model has better VIF values
+
+```{r}
+#Comparison statistics for our three models
+
+#AIC, BIC, R squared, R squared adj, Press p
+abra_summary_df = data.frame(aic_model = c(AIC(aic_model), BIC(aic_model), summary(aic_model)$r.squared, summary(aic_model)$adj.r.squared, press_aic),
+                             bic_model = c(AIC(bic_model), BIC(bic_model), summary(bic_model)$r.squared, summary(bic_model)$adj.r.squared, press_bic),
+                             bic_intr_model = c(AIC(bic_intr_model), BIC(bic_intr_model), summary(bic_intr_model)$r.squared, summary(bic_intr_model)$adj.r.squared, press_intr_bic),
+                             rgd_model = c(aic.ridge, bic.rdige, r_squared, r_adj_squared, NA)
+                             )
+rownames(abra_summary_df) = c('AIC', 'BIC', 'R^2', 'R adj', 'Press_p')
+kable(abra_summary_df, col.names = c('AIC model', 'BIC model', 'BIC interaction model', 'Ridge Regression'))
+
+#Mallows Cp vs model P
+cp_summary_df = data.frame(aic_model = c(ols_mallows_cp(aic_model, full_mod), length(aic_model$coefficients)),
+                           bic_model = c(ols_mallows_cp(bic_model, full_mod), length(bic_model$coefficients)),
+                           bic_intr_model = c(ols_mallows_cp(bic_intr_model, full_mod), length(bic_intr_model$coefficients)),
+                           rgd_model = c(cp.ridge, length(coef(abalone.g.best)))
+                           )
+rownames(cp_summary_df) = c('Mallows Cp', 'P')
+kable(cp_summary_df, col.names = c('AIC model', 'BIC model', 'BIC interaction model', 'Ridge Regression'))
+
+
+#RMSPE vs sqrt of SSE/n
+rmspe_df = data.frame(aic_model = c(rmspe(y_vs_data, predict(aic_model, as.data.frame(x_vs_data))), sqrt(sum(aic_model$residuals^2) / nrow(x_t_data))),
+                      bic_model = c(rmspe(y_vs_data, predict(bic_model, as.data.frame(x_vs_data))), sqrt(sum(bic_model$residuals^2) / nrow(x_t_data))), 
+                      bic_intr_model = c(rmspe(y_vs_data, predict(bic_intr_model, as.data.frame(x_vs_data))), sqrt(sum(bic_intr_model$residuals^2) / nrow(x_t_data))), 
+                      rgd_model = c(rmspe(y_v_data, y.ridge_pred), sqrt(sse / nrow(x_t_data)))
+                      )
+rownames(rmspe_df) = c('RMSPE', 'SSE / n')
+kable(rmspe_df, col.names = c('AIC model', 'BIC model', 'BIC interaction model', 'Ridge Regression'))
+```
+
+### Comparing Re-fitting AIC & BIC
+
+```{r}
+#Refit our models on the validation data to see if any coefficients of regression change
+aic_valid = lm(y_vs_data ~ Shell_weight + Shucked_weight + Diameter + Height + M + F + Length, data = as.data.frame(x_vs_data), subset = setdiff(rownames(abalone), "2052"))
+bic_valid = lm(y_vs_data ~ Shell_weight + Shucked_weight + Diameter + Height + M + F, data = as.data.frame(x_vs_data), subset = setdiff(rownames(abalone), "2052"))
+
+#Summary table of model coefficients
+kable(data.frame( training = coef(aic_model), validation = coef(aic_valid)), caption = 'Regression Coefficients of AIC Model on Training & Validation Data')
+kable(data.frame( training = coef(bic_model), validation = coef(bic_valid)), caption = 'Regression Coefficients of BIC Model on Training & Validation Data')
+
+#Summary table of model VIFs
+kable(data.frame(aic_vif = vif(aic_model), c(bic_vif = vif(bic_model), NA)), col.names = c('AIC VIF', 'BIC VIF'), caption = 'VIF between AIC & BIC models')
+```
+
+<https://statisticsbyjim.com/regression/multicollinearity-in-regression-analysis/>
