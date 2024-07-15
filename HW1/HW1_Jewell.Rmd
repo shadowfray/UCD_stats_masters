@@ -1,0 +1,609 @@
+---
+title: "HW1_141B_Jewell"
+author: "Benjamin Jewell"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+The attached code runs to unzip all five location climate/solar data
+into a single folder, /dt/ in this case, and then reads in the WEA,
+PVSYST and STAT data. From here it compiles the specified tables
+contained within and formats them into a proper data frame. The STAT
+hourly data is then recombined and graphed, and the data frames are
+either returned or printed.
+
+**Assumptions & Understanding the data:**
+
+During this procedure I made several assumptions about the data. For
+one, I assumed that the data was correct and properly formatted (no
+missing values, inconsistent tables, etc) which I checked by opening the
+files in a text editor and looking at them. As well I assumed and
+verified that that each table(s) was the same across all five documents,
+which was true as well. One assumption I made that turned out to be
+incorrect was that the tables would be the same size for all documents,
+and that all tables would start on the same line. This turned out to not
+be the case, and as such the start and end lines of each table had to be
+calculated using the grep command.
+
+For the WEA and PVSYST tables I mostly looked at the tables visually to
+understand their structure and how to break them up. For the STAT files
+I assumed that the Hourly and Monthly data would be structured the same
+and thus made a function to read in hourly tables and a function to read
+in monthly tables. As it turns out this wasn't quite correct, as the
+Wind Speed Monthly table wrote out their minimum and maximum values
+slightly differently. Upon discovering this I had to write a custom flag
+to adjust the index of the numeric values when extracting the minimum
+and maximum from the Wind Speed Monthly table. As it turned out the
+Monthly Wind Direction was a bit different from the other tables, and
+thus my assumptions that all monthly tables were the same was wrong. I
+decided to just write a custom parser for Monthly Wind Direction that
+was somewhat similar to the Month Parser rather than trying to make the
+base function more modular as that seemed easier.
+
+**Verification & Debugging:**
+
+My main procedure was to check the first three and last three entries of
+each column in a given table for each variable by visually comparing the
+two values. I was fairly confident in this method as I never performed
+any arithmetic on these values, and the same operation was performed on
+all values, meaning that if the first couple were right, they should all
+be correct. Of note when cutting up strings I would take a more in depth
+look than just the first and last value, as these were much more
+sensitive to problems. For those values that needed to be reformatted or
+cut out a string I would make sure to check these values with lots of
+print statements to see that the output fit what I wanted. In generally
+this combination of visual comparison and a hefty use of print
+statements were my main debugging/verification tools.\
+As well I also wrote a debug_stats() function to use on a few tables
+which checked the unique variables for a given table, along with the min
+and max values. For the monthly tables in which we needed to verify the
+minimum and maximum values I wrote a function that checked that these
+lined up with the data from the tables. A function, vis_inspc() was also
+added to allow for visualization of each column of a data frame. This
+was not used to debug the hourly tables, as they were already being
+printed out separately. Due to the number of graphs this can create,
+they will only print if the variable DEBUG == TRUE.
+
+**The Code:**
+
+The code itself is mainly composed of a function to read each table
+type, with a few expansions and additions. Ggplot2 was imported for
+graphs. The functions made were:
+
+*unzip_fct* Unzips the specified list of zip folders
+
+*debug_stats* Takes a data frame and prints out the unique variables in
+each column, along with their min and max for debugging purposes
+
+*vis_inspc* Takes a data frame and the selected columns. For each of
+those columns if they contain numbers, it will graph them against their
+column index.
+
+*asnum_col* Takes a data frame and a list of columns. Returns the given
+data frame with the indicated columns transformed into numerics
+
+*posix_convert* takes column(s) from a dataframe and converts them into
+POSIXct format. Returns a data frame with the indicated columns
+transformed.
+
+*wea_parser* Given a path to a .WEA file it returns a data frame of the
+data contained within
+
+*pvsyst_parser* Given a path to a .pvsyst file it returns a data frame
+of the data contained within.
+
+*month_parser* Takes data as a list of strings from readLines(), along
+with a start line, an end line and `wind` Boolean. This data should be
+from a month table from a stat file. Start line and end line pick what
+subset of the stat file should be read. The `wind` Boolean is a flag to
+indicate we are reading from Monthly Wind Speed and allows for some
+minor corrections to our code to ensure no bugs. Returns a data frame.
+
+*wind_dir_parser* A custom modified month_parser. If using OOP this
+would be a subclass of month_parser. Only takes data as a list of string
+from readLines(). Returns a data frame.
+
+*hourly_parser* Takes data as a list of strings from readLines() along
+with a start line and an end line. To be used for data from hourly
+tables. Data is placed in month, hour order, along with a column for
+month and hour for each data point. Returns a data frame.
+
+*trim_time* Takes a data frame and a column. Removes white space from
+the given column so that as.numeric() can be used on them safely.
+
+*combine_hours* Takes five data frames from hourly tables. Places month
+data in first column, hour data in second column and then extracts the
+data columns from the five given data frames adds them to the table
+aligned with proper month and time. Returns this new data frame.
+
+*graph_attrs* Takes a data frame from combine_hours() and graphs all
+five attributes for each given month of the data frame. Prints out the
+resulting scatter plot for visual inspection. Returns NONE.
+
+*stat_parse* Takes a path to a STAT file to parse. Parses the file into
+9 separate data frames as specified in the assignment, then combines the
+5 hourly data frames into a singular data frame. The combined data frame
+is then graphed for each month for a total of 12 graphs. The four hourly
+data frames and the one combine hourly data frame are then either
+printed or returned.
+
+**Code Commentary:**
+
+I chose to write out each function for each of the file types and call
+them individually for each given location. While it would be rather easy
+to write a main function that runs through the entire process for a
+given location, I chose this approach given the fact that Rmarkdown runs
+through the entire code anyways I didn't see the need, especially since
+it was not specified and this code is being used for a single
+assignment. If we were using this code again in the future to read
+through the data for every location in California for example then I
+most certainly would automate it that way, but for now it doesn't seem
+necessary. I chose to print out the data frames and graphs from STAT
+file rather than returning them for ease of access for actually reading
+them for my own analysis and for grading. The data frames can be
+returned inside a vector if `ReturnDataFrames` is set to TRUE, in case
+that is needed for grading.
+
+**WORKS CITED:**
+
+[1]
+<https://statisticsglobe.com/convert-data-frame-column-to-numeric-in-r>
+
+[2]
+<https://www.tutorialspoint.com/how-to-access-elements-of-nested-lists-in-r>
+
+[3]
+<https://www.geeksforgeeks.org/converting-a-list-to-vector-in-r-language-unlist-function/>
+
+[4] <https://statisticsglobe.com/find-elements-list-r>
+
+[5]
+<https://www.geeksforgeeks.org/how-to-plot-a-subset-of-a-dataframe-using-ggplot2-in-r/#>
+
+[6]
+<https://stackoverflow.com/questions/15678261/ggplot-does-not-work-if-it-is-inside-a-for-loop-although-it-works-outside-of-it>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Global Stuff
+
+```{r}
+library(ggplot2)
+
+#Determines if we print out debug plots & print statements, default FALSE due to how long the output of this file gets if TRUE
+DEBUG = FALSE
+#Determines if stat_parser() returns the data frames as a vector (TRUE) or just prints them out (FALSE)
+ReturnDataframes = TRUE
+```
+
+Unzip our files into ./dt
+
+```{r}
+zip_paths = c('dt/USA_CA_Fairfield-San.Francisco.Bay.Reserve.998011_TMYx.2007-2021.zip',
+              'dt/USA_CA_Marin.County.AP-Gnoss.Field.720406_TMYx.2007-2021.zip',
+              'dt/USA_CA_Napa.County.AP.724955_TMYx.2007-2021.zip',
+              'dt/USA_CA_Point.Reyes.Lighthouse.724959_TMYx.2007-2021.zip',
+              'dt/USA_CA_UC-Davis-University.AP.720576_TMYx.2007-2021.zip')
+
+unzip_fct <- function(zippaths){
+  for (i in c(1:length(zippaths))){
+    unzip(zippaths[i], exdir = './dt')
+  }
+}
+
+unzip_fct(zip_paths)
+```
+
+**Misc Functions**
+
+```{r}
+#takes the data frame and # of variables/columns 
+debug_stats <- function(df, n_var){
+  print('DEBUG STATS: # of NAs, # of Unique Vals, Min, Max')
+  for (i in 1:n_var){
+      print(which(is.na(df[,i])))
+      print(length(unique(df[,i])))
+      print(c(min(df[,i]), max(df[,i]))) }
+}
+
+#rewrites a given column(s) as numeric
+asnum_col <- function(df, cols_idx){
+  for (i in cols_idx){
+    df[,i] = as.numeric(df[,i])
+  }
+  return(df)
+}
+
+#converts a row of a:b time into POSIXct time
+posix_convert <- function(df, time_cols){
+  #Add 2023, Month, Time and PDT to data
+  
+  #convert to POSIX
+  for (i in time_cols){
+    for (j in c(1:nrow(df))){
+      #print(df[j,i])
+      dayhour = strsplit(df[j,i], ':')
+      time = paste('2023/', j,'/', dayhour[[1]][[1]], ' ', dayhour[[1]][[2]], ':00', sep='')
+      #print(paste('TIME:', as.POSIXct(time)))
+      df[j,i] = as.character(as.POSIXct(time))
+    }
+  }
+  return(df)
+}
+
+#graph each column for visual inspection
+vis_inspc <- function(df, cols_idx){
+  for (i in cols_idx){
+    xaxis = c(1:nrow(df))
+    yaxis = df[,i]
+    if (is.numeric(yaxis) == TRUE){
+      plot(xaxis, yaxis)
+    }
+    if (is.integer(yaxis) == TRUE){
+     plot(xaxis, yaxis)
+    }
+    if (is.double(yaxis) == TRUE){
+      plot(xaxis, yaxis)
+    }
+  }
+}
+
+```
+
+**WEA Parser**
+
+```{r}
+wea_parser <- function(wea_path){
+  
+  #Read in the data & ignore the header
+  wea_lines = readLines(wea_path)
+  start = grep("weather_data_", wea_lines) + 1
+  wea_txt = wea_lines[start:length(wea_lines)]
+  
+  #Split our data and then rearrange it for ease of data.frame assembly
+  splt_wea = strsplit(wea_txt, " ")
+  monthv = vector()
+  dayv = vector()
+  sdt_tv = vector()
+  dniv = vector()
+  dhiv = vector()
+  
+  for (i in c(1:length(splt_wea))){
+    #[1][2] Used to save as int, & find out how to access nested list values
+    monthv = c(monthv, as.integer(splt_wea[[i]][[1]]))
+    dayv = c(dayv, as.integer(splt_wea[[i]][[2]]))
+    sdt_tv = c(sdt_tv, as.integer(splt_wea[[i]][[3]]))
+    dniv = c(dniv, as.integer(splt_wea[[i]][[4]]))
+    dhiv = c(dhiv, as.integer(splt_wea[[i]][[5]]))
+  }
+  wea_df = data.frame(monthv, dayv, sdt_tv, dniv, dhiv)
+  
+  #Define columns names as defined by professor on Piazza
+  colnames(wea_df) = c("Month", "Day", "Standard_Time", "Direct Normal Irradiance", "Diffuse Horizontal Irradiance")
+  
+  if (DEBUG == TRUE){
+    debug_stats(wea_df, 5)
+    vis_inspc(wea_df, c(1:ncol(wea_df)))
+    }
+  return(wea_df)
+}
+
+wea_marin = wea_parser('dt/USA_CA_Marin.County.AP-Gnoss.Field.720406_TMYx.2007-2021.wea')
+wea_SF = wea_parser('dt/USA_CA_Fairfield-San.Francisco.Bay.Reserve.998011_TMYx.2007-2021.wea')
+wea_napa = wea_parser('dt/USA_CA_Napa.County.AP.724955_TMYx.2007-2021.wea')
+wea_reyes = wea_parser('dt/USA_CA_Point.Reyes.Lighthouse.724959_TMYx.2007-2021.wea')
+wea_UCD = wea_parser('dt/USA_CA_UC-Davis-University.AP.720576_TMYx.2007-2021.wea')
+```
+
+**PVSYST Parser**
+
+```{r}
+
+pvsyst_parser <- function(pvsyst_path){
+  pvsyst_ll = readLines(pvsyst_path)
+  start = grep("W/m2,W/m2,W/m2,deg.C,m/sec", pvsyst_ll) + 1
+  pvsyst_dt = pvsyst_ll[start:length(pvsyst_ll)]
+  
+  #separate data by commas, like a CSV
+  pv_df = read.table(textConnection(pvsyst_dt), sep = ',')
+  
+  #add the column names in
+  col_names = pvsyst_ll[grep('Year,Month,Day,Hour,Minute,GHI,DHI,DNI,Tamb,WindVel,WindDir', pvsyst_ll)]
+  #[3] How to use unlist to turn a list into a character value so we can use it for colnames
+  colnames(pv_df) = unlist(strsplit(col_names, ','))
+  
+  if (DEBUG == TRUE){
+    debug_stats(pv_df, 11)
+    vis_inspc(pv_df, c(1:ncol(pv_df)))
+    }
+  return(pv_df)
+}
+
+pv_SF = pvsyst_parser('dt/USA_CA_Fairfield-San.Francisco.Bay.Reserve.998011_TMYx.2007-2021.pvsyst')
+pv_marin = pvsyst_parser('dt/USA_CA_Marin.County.AP-Gnoss.Field.720406_TMYx.2007-2021.pvsyst')
+pv_napa = pvsyst_parser('dt/USA_CA_Napa.County.AP.724955_TMYx.2007-2021.pvsyst')
+pv_reyes = pvsyst_parser('dt/USA_CA_Point.Reyes.Lighthouse.724959_TMYx.2007-2021.pvsyst')
+pv_UCD = pvsyst_parser('dt/USA_CA_UC-Davis-University.AP.720576_TMYx.2007-2021.pvsyst')
+```
+
+## STAT FILE
+
+**Monthly Statistics for Dew Point & Dry Bulb**
+
+```{r}
+month_parser <- function(stat_ll, start, end, wind=FALSE){
+  db_month_dt = stat_ll[(start+1):(end-1)]
+  
+  #remove white space lines
+  db_month_dt = db_month_dt[c(-which(db_month_dt == ""))]
+  #Omits the month row and the Max/Min row from the actual table
+  db_table = read.table(textConnection(db_month_dt[2:(length(db_month_dt)-2)]), sep = '\t')
+  
+  #add column names
+  colnames(db_table) = read.table(textConnection(db_month_dt[1]), sep = '\t')
+  db_table = db_table[,c(-1, -ncol(db_table))]
+  
+  #Reformat table so months are rows and min/max/etc is columns
+  db_table = data.frame(t(db_table))
+  colnames(db_table) = db_table[1,]
+  db_table = db_table[-1, ]
+  
+  #convert all non-times to integers
+  db_table = asnum_col(db_table, c(1,3,5:ncol(db_table)))
+  #convert all times to POSIXct
+  db_table = posix_convert(db_table, c(2,4))
+  
+  #verify max/min times:
+  maxmin_dt = db_month_dt[c(length(db_month_dt)-1,length(db_month_dt))]
+  #True Max, Min
+  max_db = max(db_table$Maximum)
+  min_db = min(db_table$Minimum)
+  #extract the values from str
+  max_str = strsplit(maxmin_dt[[1]], " ")
+  min_str = strsplit(maxmin_dt[[2]], " ")
+  max_str = max_str[[1]][-c(which(max_str[[1]] == ""))]
+  min_str = min_str[[1]][-c(which(min_str[[1]] == ""))]
+  
+  #Special case to accommodate format for Wind Spd Monthly table
+  val_idx = 7
+  month_sub = 1
+  if (wind == TRUE){
+    val_idx = 6
+    month_sub = 0}
+  
+  #Max Handling
+  max_data = c(as.numeric(substr(max_str[val_idx], 1,nchar(max_str[val_idx])-month_sub)), max_str[9], as.numeric(max_str[10]))
+  max_data[2] = as.numeric(which(sapply(row.names(db_table), function(x) max_data[2] %in% x)))   #[4]Finding Element Index in List
+  #Min Handling
+  min_data = c(as.numeric(substr(min_str[val_idx], 1,nchar(min_str[val_idx])-month_sub)), min_str[9], as.numeric(min_str[10]))
+  min_data[2] = as.numeric(which(sapply(row.names(db_table), function(x) min_data[2] %in% x)))
+
+  #Print Warnings in case they do not match
+  if (max_db != db_table[as.numeric(max_data[2]),1]){
+    print('Maximum values do not match!')
+    print(paste(max_db, '!=', db_table[as.numeric(max_data[2]),1]))}
+  #max_data[1] =1 
+  if (max_db != as.numeric(max_data[1])){
+    print("True Maximum and Stated Maximum do not match!")
+    print(paste(max_db, '!=', as.numeric(max_data[1])))}
+  #Min Warnings
+  if (min_db != db_table[as.numeric(min_data[2]),3]){
+    print('Minimum values do not match!')
+    print(paste(min_db, '!=', db_table[as.numeric(min_data[2]),3]))}
+  if (min_db != as.numeric(min_data[1])){
+    print("True Minimum and Stated Minimum do not match!")
+    print(paste(min_db, '!=', as.numeric(min_data[1])))}
+  
+  if (DEBUG == TRUE){
+    debug_stats(db_table, ncol(db_table))
+    vis_inspc(db_table, c(1:ncol(db_table)))
+    }
+  
+  return(db_table)
+}
+```
+
+**Monthly Wind Direction (Interval 11.25 deg from displayed deg)**
+
+```{r}
+wind_dir_parse <- function(stat_ll){
+  start = grep('Monthly Wind Direction', stat_ll)
+  end = grep('Monthly Statistics for Wind Speed', stat_ll)
+  db_month_dt = stat_ll[(start+1):(end-1)]
+  
+  #remove white space lines
+  db_month_dt = db_month_dt[c(-which(db_month_dt == ""))]
+  #Omits the month row and the Max/Min row from the actual table
+  db_table = read.table(textConnection(db_month_dt[2:length(db_month_dt)]), sep = '\t')
+  
+  #add column names
+  colnames(db_table) = read.table(textConnection(db_month_dt[1]), sep = '\t')
+  db_table = db_table[,c(-1, -ncol(db_table))]
+  
+  #Reformat table so months are rows and min/max/etc is columns
+  db_table = data.frame(t(db_table))
+  colnames(db_table) = db_table[1,]
+  db_table = db_table[-1, ]
+  
+  if (DEBUG == TRUE){
+    debug_stats(db_table, ncol(db_table))
+    vis_inspc(db_table, c(1:ncol(db_table)))
+    }
+  
+  return(db_table)
+}
+```
+
+**Hourly Parser**
+
+```{r}
+
+hourly_parser <- function(stat_ll, start, end){
+  db_month_dt = stat_ll[(start+1):(end-1)]
+  
+  #remove white space lines
+  db_month_dt = db_month_dt[c(-which(db_month_dt == ""))]
+  #Omits the month row and the Max/Min row from the actual table
+  db_table = read.table(textConnection(db_month_dt[2:(length(db_month_dt)-2)]), sep = '\t')
+  
+  #add column names
+  colnames(db_table) = read.table(textConnection(db_month_dt[1]), sep = '\t')
+  db_table = db_table[,c(-1, -ncol(db_table))]
+  
+  #Reformat table so months are rows and min/max/etc is columns
+  db_table = data.frame(t(db_table))
+  colnames(db_table) = db_table[1,]
+  db_table = db_table[-1, ]
+  
+  #We now create our (24 x 12=) 288 * 3 table
+  months = row.names(db_table)
+  hours = colnames(db_table)
+  data_col = vector()
+  #Orders all Jan hours, then all Feb hours, ..., then all Dec hours
+  for (mon in 1:length(months)){
+    for (hr in 1:length(hours)){
+      data_col = c(data_col, db_table[mon, hr])}}
+ 
+  #We know that we will have 288 values at the end
+  if (DEBUG == TRUE){
+    if (length(data_col) != 288){
+      print('Missing hourly data!')
+      print(paste('Length of hourly data:', length(data_col)))}}
+  
+  #Using that fact, we can generate appropriate length hour & month columns
+  hour_col = rep(hours, length(data_col)/length(hours))
+  month_col = vector()
+  #generate months in batches of 24 to line up with the data temporarily
+  for (i in 1:length(months)){
+    month_col = c(month_col, rep(months[[i]], 24))
+  }
+  
+  hourly_table = data.frame(data_col, month_col, hour_col)
+  
+  hourly_table = trim_time(hourly_table, 3)
+  hourly_table = asnum_col(hourly_table, c(1,3))
+  
+  if (DEBUG == TRUE){debug_stats(db_table, ncol(db_table))}
+  
+  return(hourly_table)
+}
+
+trim_time <- function(df, col){
+  for (i in 1:nrow(df)){
+    df[i,col] = as.integer(as.integer(trimws(substring(df[i,col], 0,2))))
+  } 
+  return(df)}
+
+```
+
+**Combining the hourly data**
+
+```{r}
+
+combine_hours <- function(df1, df2, df3, df4, df5){
+  col_names = c('Month', 'Hour', 'Dry Bulb Temp', 'Dew Point Temp', 'Relative Humidity', 'Dir Normal Solar Radiation', 'Wind Spd')
+  df_c = c(df2, df3, df4, df5)
+  
+  return_df = data.frame(df1$month_col, df1$hour_col, df1$data_col, df2$data_col, df3$data_col, df4$data_col, df5$data_col)
+  colnames(return_df) = col_names
+  
+  if (DEBUG == TRUE){debug_stats(return_df, ncol(return_df))}
+  
+  return(return_df)
+}
+```
+
+**Graphing the hourly data**
+
+```{r}
+graph_attrs <- function(df, locationstr){
+  lct_str = substring(locationstr, 4, nchar(locationstr)-27)
+  
+  month_list = unique(df[,1])
+  
+  for (i in 1:length(month_list)){
+  #[5] Taking subsets of data in ggplot
+  #[6] How to make ggplot appear in for loop
+    print(ggplot(subset(df, Month %in% month_list[i])) + 
+      geom_point(aes(Hour, `Dry Bulb Temp`, color = 'orange')) +
+      geom_point(aes(Hour, `Dew Point Temp`, color = 'lightblue')) +
+      geom_point(aes(Hour, `Relative Humidity`, color = 'blue')) +
+      geom_point(aes(Hour, `Dir Normal Solar Radiation`, color = 'yellow')) +
+      geom_point(aes(Hour, `Wind Spd`)) +
+      ylab('Variables') + ggtitle(paste(month_list[i], 'Data:', lct_str)))
+  }
+}
+```
+
+**stat file master parser**
+
+```{r}
+stat_parser <- function(stat_path){
+  stat_ll <- readLines(stat_path)
+  
+  start = grep('Monthly Statistics for Dry Bulb temperatures', stat_ll)
+  end = grep('Monthly Statistics for Extreme Dry Bulb temperatures', stat_ll)
+  drybulb_month_df = month_parser(stat_ll, start, end)
+  
+  start = grep('Monthly Statistics for Dew Point temperatures', stat_ll)
+  end = grep('Average Hourly Statistics for Dry Bulb temperatures', stat_ll)
+  dew_point_month_df = month_parser(stat_ll, start, end)
+
+  start = grep('Monthly Statistics for Wind Speed', stat_ll)
+  end = grep('Average Hourly Statistics for Wind Speed', stat_ll)
+  wind_spd_month_df = month_parser(stat_ll, start, end, TRUE)
+
+  wind_dir_month_df = wind_dir_parse(stat_ll)
+  
+  start = grep('Average Hourly Statistics for Dry Bulb temperatures', stat_ll)
+  end = grep('Average Hourly Statistics for Dew Point temperatures', stat_ll)
+  avg_hr_dry_bulb_temp_df = hourly_parser(stat_ll, start, end)
+
+  start = grep('Average Hourly Statistics for Dew Point temperatures', stat_ll)
+  end = grep('Monthly Statistics for Relative Humidity', stat_ll)
+  avg_hr_dew_pnt_temp_df = hourly_parser(stat_ll, start, end)
+
+  start = grep('Average Hourly Relative Humidity', stat_ll)
+  end = grep('Monthly Statistics for Enthalpy', stat_ll)
+  avg_hr_relative_hum_df = hourly_parser(stat_ll, start, end)
+
+  start = grep('Average Hourly Statistics for Direct Normal Solar Radiation ', stat_ll)
+  end = grep('Average Hourly Statistics for Diffuse Horizontal Solar Radiation', stat_ll)
+  avg_hr_dir_norm_solar_rad_df = hourly_parser(stat_ll, start, end)
+  
+  start = grep('Average Hourly Statistics for Wind Speed', stat_ll)
+  end = grep('Average Hourly Statistics for Wind Direction', stat_ll)
+  avg_hr_wind_spd_df = hourly_parser(stat_ll, start, end)
+  
+  final_hr_df = combine_hours(avg_hr_dry_bulb_temp_df,
+                              avg_hr_dew_pnt_temp_df,
+                              avg_hr_relative_hum_df,
+                              avg_hr_dir_norm_solar_rad_df,
+                              avg_hr_wind_spd_df
+                              )
+  
+  graph_attrs(final_hr_df, stat_path)
+  
+  if (ReturnDataframes == FALSE){
+    print(drybulb_month_df)
+    print(dew_point_month_df)
+    print(wind_spd_month_df)
+    print(wind_dir_month_df)
+    print(final_hr_df)
+  } else {
+    return(c(drybulb_month_df, dew_point_month_df, wind_spd_month_df, wind_dir_month_df, final_hr_df))
+  }
+}
+stat_SF = stat_parser('dt/USA_CA_Fairfield-San.Francisco.Bay.Reserve.998011_TMYx.2007-2021.stat')
+stat_marin = stat_parser('dt/USA_CA_Marin.County.AP-Gnoss.Field.720406_TMYx.2007-2021.stat')
+stat_napa = stat_parser('dt/USA_CA_Napa.County.AP.724955_TMYx.2007-2021.stat')
+stat_reyes = stat_parser('dt/USA_CA_Point.Reyes.Lighthouse.724959_TMYx.2007-2021.stat')
+stat_UCD = stat_parser('dt/USA_CA_UC-Davis-University.AP.720576_TMYx.2007-2021.stat')
+```

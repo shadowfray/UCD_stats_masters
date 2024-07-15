@@ -1,0 +1,441 @@
+---
+title: "Reading Computer Log Files"
+author: "Benjamin Jewell"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+SET UP / GLOBALS
+This is where our path for the file is written and the CSV files will be saved.
+```{r}
+library(knitr)
+
+#The directory we will be working in where MergedAuth.log is stored
+#This is also where the data frames will be saved as CSV files
+file_dir = 'E:/College/UC Davis/STA141B/HW2/'
+
+#The manual first and last lines of each log for comparison
+file_start_check = list('Nov 30 06:39:00 ip-172-31-27-153 CRON[21882]: pam_unix(cron:session): session closed for user root',
+                        'Mar 27 13:06:56 ip-10-77-20-248 sshd[1291]: Server listening on 0.0.0.0 port 22.',
+                        'Jun 14 15:16:01 combo sshd(pam_unix)[19939]: authentication failure; logname= uid=0 euid=0 tty=NODEVssh ruser= rhost=218.188.2.4 ',
+                        'Jul  1 09:00:55 calvisitor-10-105-160-95 kernel[0]: IOThunderboltSwitch<0>(0x0)::listenerCallback - Thunderbolt HPD packet for route = 0x0 port = 11 unplug = 0',
+                        'Dec 10 06:55:46 LabSZ sshd[24200]: reverse mapping checking getaddrinfo for ns.marryaldkfaczcz.com [173.234.31.186] failed - POSSIBLE BREAK-IN ATTEMPT!')
+
+file_ends_check = list('Dec 31 22:27:48 ip-172-31-27-153 sshd[8003]: Connection closed by 218.2.0.133 [preauth]',
+                       'Apr 20 14:14:29 ip-10-77-20-248 systemd-logind[1118]: New session 858 of user ubuntu.',
+                       'Jul 27 14:42:00 combo kernel: Linux agpgart interface v0.100 (c) Dave Jones',
+                       'Jul  8 08:10:46 calvisitor-10-105-162-124 kernel[0]: AppleCamIn::wakeEventHandlerThread',
+                       'Dec 10 11:04:45 LabSZ sshd[25539]: Failed password for invalid user user from 103.99.0.122 port 52683 ssh2')
+```
+We check the file names by manual comparison, there's only 5 so I just ctrl+f and found them and compared them
+
+Generic Functions:
+```{r}
+#Convert column(s) to numerics
+asnum_col <- function(df, cols_idx){
+  for (i in cols_idx){
+    df[,i] = as.numeric(df[,i])
+  }
+  return(df)
+}
+
+#Convert column(s) to posixs
+posix_convert <- function(df){
+  #Add 2023, Month, Time and PDT to data
+  months = c('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec')
+  
+  for (i in 1:length(df$Date)){
+    mon = grep(substring(df[i, 1], 1, 3), months)
+    day = trimws(substring(df[i,1], 5, 6))
+    clock = trimws(substring(df[i, 1], 8, 15))
+    fix_date = paste('2023/', mon, '/',  day, ' ', clock, sep='')
+    df[i, 1] = as.character(as.POSIXct(fix_date))
+  }
+  return(df)
+}
+
+#Wrapper for kable printings, printing NA if no values present
+#[8] Add optional arguments
+kprint <- function(obj, cols, cap){
+  if (length(obj) < 1){obj = NA}
+  
+  if (missing(cols) && missing(cap)){
+    print(kable(obj))
+  } else if (missing(cols)){
+    print(kable(obj, caption = cap))
+  } else if (missing(cap)) {
+    print(kable(obj, col.names = cols))
+  } else{
+    print(kable(obj, col.names = cols, caption = cap))
+  }
+}
+```
+
+PARSE LOG FILE INTO DATA FRAME
+```{r}
+parse_logs <- function(log_path){
+  #[1] 'Warning: Incomplete Final Line Found' -> Add a new line manually
+  log_lines = readLines(file(log_path))
+  
+  log_starts = c(grep('#+.+log', log_lines))
+  
+  log_names = sapply(log_lines[log_starts], function(x) substring(x, 3, nchar(x)))
+  #print(log_names)
+  
+  name_idx = lapply(log_names, function(x) gregexpr('.*/?.*/+', x, fixed = FALSE))
+  
+  #save the log names for each file
+  l_names = vector()
+  for (i in 1:length(log_names)){
+    l_names = c(l_names, tail(regmatches(log_names[[i]], name_idx[[i]], invert = TRUE)[[1]], n = 1))
+  }
+  
+  #include the end for chopping purposes
+  log_starts = c(log_starts, length(log_lines)+1)
+  
+  #for each 'log file' call log2df()
+  df_list = list()
+  
+  for (i in 1:5){
+    #df_list = append(df_list, log2df(log_lines[log_starts[i]:(log_starts[i+1]-1)], l_names[i]))
+    #[4] save data frame to CSV
+    csv_name = paste('E:/College/UC Davis/STA141B/HW2/', l_names[i],'.csv', sep='')
+    write.csv(log2df(log_lines[log_starts[i]:(log_starts[i+1]-1)], l_names[i]), csv_name)
+  }
+  print(df_list)
+}
+```
+
+```{r}
+log2df <- function(log_lines, logfile_name){
+  log_lines = as.list(log_lines)
+  # print(logfile_name)
+  # print(length(log_lines))
+  # print('---')
+  # print(head(log_lines, n=5))
+  # print('===')
+  # print(tail(log_lines, n=5))
+  # print('---')
+  
+  #[2] make sure we don't return integer0
+  empty_lines = which(log_lines == "")
+  if (length(empty_lines) != 0){
+    log_lines = log_lines[-c(empty_lines)]
+  }
+  log_lines = log_lines[2:length(log_lines)]
+  
+  #check to make sure that the first & last line matches
+  print(paste('FIRST LINE MATCH:', head(log_lines, n = 1) %in% file_start_check))
+  print(paste('LAST LINE MATCH:', tail(log_lines, n=1) %in% file_ends_check))
+  
+  
+  #Ensures our assumption that all meta data has 2 colons before the colon separator to the message
+  broke_meta_test = sapply(log_lines, function(x) grepl("^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)  ?[0-9][0-9]? [0-9][0-9]:[0-9][0-9]:[^:]+: ", x))
+  print(log_lines[!broke_meta_test])
+  
+  #extracts metadata
+  meta_data = sapply(log_lines, function(x) regmatches(x, gregexpr("^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)  ?[0-9][0-9]? [0-9][0-9]:[0-9][0-9]:[^:]+: ", x)))
+  #print(head(trimws(meta_data), n = 25))
+  
+  #Extracts messages (aka Non-metadata) from each line
+  msgs = sapply(log_lines, function(x) regmatches(x, gregexpr("^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)  ?[0-9][0-9]? [0-9][0-9]:[0-9][0-9]:[^:]+: ", x), invert = TRUE))
+  msgs = sapply(msgs, function(x) trimws(x[[length(x)]]))
+  #print(head(msgs, n=100))
+  sapply(msgs, function(x) if (length(x)!=1){print(x)})
+  
+  log_lines = meta_data #Variable changes fix
+  
+  #Extract Date-Time
+  #Take out data-time REGEX: (Any Month, any spaces [1 or 2 numbers]:[1 or 2 numbers]:[1 or 2 numbers])
+  dates =sapply(log_lines, function(x) regmatches(x, gregexpr("(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +[0-9][0-9]? [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}", x)))
+  #print(head(dates))
+  #print(tail(dates))
+  
+  #Extract Logging Host
+  #Same conditions as date+time, but also grab until next space
+  logging_hosts = sapply(log_lines, function(x) regmatches(x, gregexpr("(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +[0-9][0-9]? [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2} [^ ]+ ", x)))
+  logging_hosts = sapply(logging_hosts, function(x) regmatches(x, gregexpr(' [^ ]+ $', x)))
+  #print(head(logging_hosts))
+  #print(tail(logging_hosts))
+  
+  #Extract App & PID
+  #extracting based on the assumption of four chunks of [text][space] before
+  app_pids = sapply(log_lines, function(x) regmatches(x, gregexpr('^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +[0-9][0-9]? [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2} [^ ]+ ', x), invert = TRUE)[[1]][2])
+
+  sapply(app_pids, function(x) if (length(x) != 1){print(x)})
+  #print(head(app_pids, n=50))
+
+  
+  #Separate App & PID
+  #we will have [ ] if there is a PID
+  #OLD: PIDs = sapply(app_pids, function(x) regmatches(x, gregexpr('\\[[0-9]+\\][^\\)]', x)))
+  PIDs = sapply(app_pids, function(x) regmatches(x, gregexpr('\\[[0-9]+\\][^\\)]', x)))
+  #Extract Only the nums from the PID we just found:
+  PIDs = sapply(PIDs, function(x) regmatches(x, gregexpr('[0-9]+', x)))
+  Apps = sapply(app_pids, function(x) regmatches(x, gregexpr('^[^:\\[]+', x)))
+  
+  #Missing PID Exception Handling:
+  PIDs = sapply(PIDs, function(x) if(length(x) == 0){x = NA} else {x = x})
+  PIDs = sapply(PIDs, function(x) if(is.null(x) == FALSE){x = substr(x, 1, nchar(x)-1)})
+  
+  #print(head(PIDs, n=50))
+  #print(head(Apps))
+  #sapply(PIDs, function(x) if (length(x) != 1){print(x)})
+  sapply(Apps, function(x) if (length(x) != 1){print(x)})
+  
+  
+  #log file name
+  log_filename_list = c(rep(logfile_name, length(log_lines)))
+  
+  ldf = data.frame(matrix(NA, nrow = length(log_lines), ncol= 6))
+  col_names = c('Date', 'Logging Host', 'App', 'PID', 'Message', 'Log File')
+  
+  #Compile the data frame
+  colnames(ldf) <- col_names
+  ldf$Date = t(data.frame(dates))
+  ldf$`Logging Host` = t(data.frame(logging_hosts))
+  ldf$App = t(data.frame(Apps))
+  ldf$PID = PIDs
+  ldf$Message = msgs
+  ldf$`Log File` = log_filename_list
+  
+  ldf = asnum_col(ldf, c(4))
+  ldf = posix_convert(ldf)
+  
+  #Error Checking if app name is wrong
+  for (i in 1:length(ldf$App)){
+    appnm = substr(ldf[i,3], nchar(ldf[i,3]), nchar(ldf[i,3]))
+    if (is.na(appnm) == TRUE || is.null(appnm) == TRUE || nchar(appnm)==0){
+      print(ldf[i,3])
+      print(paste('Index of Error:', i))
+      print(typeof(ldf[i,3]))
+      print(appnm)
+    }
+    
+    if (appnm == ':'){
+      ldf[i,3] = substr(ldf[i,3], 1, (nchar(ldf[i,3])-1))
+    }
+  }
+  
+  print(ldf)
+  
+  #Messages for our report
+  print(paste("# of Lines in file", logfile_name, length(log_lines)))
+  sapply(ldf$PIDs, function(x) if(is.na(x) == TRUE){}else if (is.integer(x == TRUE)){} else {print(paste(x, 'is not a number!'))})
+  
+  return(ldf)
+}
+```
+
+Analyze Log Files
+```{r}
+log_analysis <- function(csvpath){
+  log_df <- read.csv(csvpath)
+  lgname = log_df$`Log.File`[[1]]
+  #print(log_df)
+  
+  #Minor data frame checks:
+  if (sum(grepl('\\[|\\]', log_df$App)) > 0){print('App names with [] in them')}
+  if (sum(grepl('\\[|\\]', log_df$PID)) > 0){print('PID with [] in them')}
+  if (sum(grepl(' ', log_df$App)) > 0){print('App with whitespace in them')}
+  if (sum(grepl(' ', log_df$Logging.Host)) > 0){print('Logging Host(s) with whitespace in them')}
+   
+  #largest date, smallest date, difference
+  smallestt = '3000-12-30 24:00:00 PST' #place holder large value
+  small_idx = -1
+  largestt = '1066-12-30 24:00:00 PST' #place holder small value
+  large_dix = -1
+  
+  for (i in 1:length(log_df$Date)){
+    #Find largest date
+    if (as.numeric(difftime(largestt, log_df[i,2])) < 0){
+      largestt = as.POSIXct(log_df[i,2])
+      large_idx = i
+    }
+    #Find smallest date
+    if (as.numeric(difftime(smallestt, log_df[i,2])) > 0){
+      smallestt = log_df[i,2]
+      small_idx = i
+    }
+  }
+
+  
+ # print(kable(c(log_df$Date[[small_idx]], log_df$Date[[large_idx]], difftime(largestt, smallestt)), col.names = paste('Smallest, Largest & Time Difference for', lgname, ':')))
+  kprint(c(log_df$Date[[small_idx]], log_df$Date[[large_idx]], difftime(largestt, smallestt)), paste('Smallest, Largest & Time Difference for', lgname, ':'))
+  
+  #application name with numbers? patterns?
+  num_names = sapply(log_df$App, function(x) grepl('[0-9]', x))
+  #Application Names with Numbers
+  #print(kable(log_df$App[num_names], col.names = c(paste('Application Names with Numbers', lgname, ':'))))
+  kprint(unique(log_df$App[num_names]), paste('Application Names with Numbers', lgname, ':'))
+  
+  #common apps being used?
+
+  appc_sorted = sort(table(log_df$App))
+  nm_df = as.data.frame(appc_sorted)
+  #print('Top 3 most common apps:')
+  if (length(nm_df) == 2){
+    colnames(nm_df) <- c('App.Name', 'Frequency')
+    kprint(nm_df)}
+
+  #print(kable(unique(log_df$Logging.Host), col.names= c(paste('Logging Host(s) for', lgname, ':'))))
+  kprint(unique(log_df$Logging.Host), paste('Logging Host(s) for', lgname, ':'))
+  
+  return(c(smallestt, largestt))
+}
+
+
+```
+
+
+LOGINS - VALID & INVALID
+```{r}
+log_sumr <- function(csvpath){
+  log_df <- read.csv(csvpath)
+  lgname = log_df$`Log.File`[[1]]
+  print('')
+  print(paste('FILE:', log_df$`Log.File`[[1]]))
+  
+  #A regular expression to get out an IP address
+  rx_ip = '(([2][0-5][0-5]|[12][0-4][0-9]|1?[0-9]?[0-9])\\.){3,3}([2][0-5][0-5]|1[0-9][0-9]|[0-9]?[0-9][^0-9])'
+  
+  ip_lines = log_df$Message[grepl(rx_ip, log_df$Message)]
+  
+  #print(ip_lines)
+  
+  #successful logins IP
+  login_good = ip_lines[grepl('Accepted publickey|New session|Starting session|Connection from|connection from|LOGIN|session opened', ip_lines)]
+  suxx_ips = sapply(login_good, function(x) regmatches(x, gregexpr(rx_ip, x)))
+  suxx_ip_unq = unique(as.character(unlist(suxx_ips)))
+  print(unique(as.character(unlist(suxx_ips))))
+  #print(kable(unique(as.character(unlist(suxx_ips))), caption = paste('Successful Login IPs',lgname,':')))
+  
+  #successful login IP + usernames
+  username_suxx = sapply(login_good, function(x) regmatches(x, gregexpr(paste('(?<= from )[^ ]+ for ', rx_ip, sep=''), x, perl = TRUE)))
+  empty_suxx = vector()
+  for (i in 1:length(username_suxx)){
+    if (length(username_suxx[i]) == 0){
+      empty_suxx = c(empty_suxx, i)
+    }
+  }
+  #username_suxx = username_suxx[-empty_suxx]
+  
+  print('Successful Login IP & Username') #sshd used to identify?
+  user_msg = login_good[grepl('user [^ ] ', login_good)]
+  users_ips = sapply(user_msg, function(x) regmatches(x, gregexper(paste('(?<=user )[a-z][^ |', rx, sep=''), x, perl=TRUE)))
+  print(kable(users_ips))
+  
+  #print(username_suxx)
+ 
+  #invalid user logins IPs
+  login_bad = ip_lines[grepl('Invalid[^a]|invalid[^a]|authentication failure|[aA}uthentication failed|[aA]uthentication failure', ip_lines)] 
+  fail_ips = sapply(login_bad, function(x) regmatches(x, gregexpr(rx_ip, x)))
+  #unlist to get multiple IPs being used in the same line => A way for intruders to hide themselves?
+  fail_ips_unq = unique(as.character(unlist(fail_ips)))
+
+  
+  if (length(fail_ips) > 0){
+    #invalid login usernames
+    username_fail = sapply(login_bad, function(x) regmatches(x, gregexpr(paste('(?<= user )[^ ]+|', rx_ip, sep=''), x, perl = TRUE)))
+    #print(c(username_fail))
+    #print(table(as.character(username_fail)))
+    
+    #[7] Fill in NAs where the list isn't long enough
+    usr_nm_fail_NA = lapply(username_fail, function(x) x = x[1:2])
+    
+    #Ensure that the missing username NAs are in the front
+    usr_nm_fail_NA = lapply(usr_nm_fail_NA, function(x) if (is.na(x[2])){x = x[2:1]} else {x = x})
+    username_fail_df = as.data.frame(do.call(rbind, usr_nm_fail_NA))
+    rownames(username_fail_df) = NULL
+    colnames(username_fail_df) = c('Failed.Username', 'Failed.IP')
+    #print(dim(username_fail_df))
+    print(kable(unique(username_fail_df)))
+    
+    #multiple failed logins from same IP
+    #print('TOp 10 Repeated Failed Logins from Same IP:')
+    #***print(head(fail_ips))
+    fail_count = table(as.character(unlist(fail_ips)))
+    fail_count = data.frame(fail_count)
+    
+    #[6] Sort in max to min order
+    fail_count = fail_count[order(-fail_count$Freq),]
+    colnames(fail_count) <- c(log_df$`Log.File`[[1]], 'Freq')
+    print(kable(fail_count[1:10,], caption = paste('Top Repeated Failed Logins from Same IP from',lgname,':'))) 
+    #print how many times each failed
+    if (FALSE){
+      print(kable(fail_count, caption = paste('Top Repeated Failed Logins from Same IP from',lgname,':'))) 
+      }
+  
+
+    #were there any valid logins from these invalid IPs
+    print('Overlap; Valid Logins from Invalid IPs:')
+    #print(kable(intersect(suxx_ip_unq, fail_ips_unq), col.names = paste('Intersection of Failed and Successful IPs',lgname,':')))
+    kprint(intersect(suxx_ip_unq, fail_ips_unq), paste('Intersection of Failed and Successful IPs',lgname,':'))
+  } else {
+    print(paste('No failed IP connections on', csvpath))
+  }
+  
+  #Too many authentication attempts
+  login_max = ip_lines[grepl('maximum authentication', ip_lines)] 
+  max_ips = sapply(login_max, function(x) regmatches(x, gregexpr(rx_ip, x)))
+  max_ips_unq = unique(as.character(unlist(max_ips)))
+  #print(kable(max_ips_unq, col.names = paste('IPs with too many authentication attempts for',lgname,':')))
+  kprint(max_ips_unq, paste('IPs with too many authentication attempts for',lgname,':'))
+}
+```
+
+SUDO COMMANDS
+```{r}
+sudo_sumr <- function(csvpath){
+  log_df <- read.csv(csvpath)
+  lgname = log_df$`Log.File`[[1]]
+  
+  #lines with sudo
+  sudo_matches_TF = sapply(log_df$App, function(x) grepl('sudo', x, fixed = TRUE))
+  sudo_msg = log_df$Message[sudo_matches_TF]
+  
+  #sudo users
+  sudo_users = sapply(sudo_msg, function(x) regmatches(x, gregexpr('USER=[^ ]+', x)))
+  #print(kable(unique(as.character(sudo_users[grepl('USER', sudo_users)])), col.names = c(paste('List of Sudo Users for', lgname,':'))))
+  kprint(unique(as.character(sudo_users[grepl('USER', sudo_users)])), paste('List of Sudo Users for', lgname,':'))
+  
+  #sudo machines
+  sudo_machines = unique(trimws(log_df$Logging.Host[sudo_matches_TF]))
+  #print(kable(sudo_machines, col.names = c(paste('Sudo Users, the logging-hosts from', lgname,':'))))
+  kprint(sudo_machines, paste('Sudo Users, the logging-hosts from', lgname,':'))
+  
+  #What Programs/Execs are run by sudo
+  sudo_commands = sapply(sudo_msg, function(x) regmatches(x, gregexpr('COMMAND=.+$', x)))
+  #print(kable(unique(as.character(sudo_commands[grepl('COMMAND', sudo_commands)], col.names = c(paste('Sudo Commands', lgname,':')))), col.names = c(paste('Sudo Commands from', lgname,':'))))
+  kprint(unique(as.character(sudo_commands[grepl('COMMAND', sudo_commands)])), paste('Sudo Commands', lgname,':'))
+}
+```
+
+"MAIN":
+```{r}
+parse_logs('E:/College/UC Davis/STA141B/HW2/MergedAuth.log')
+
+for (i in 1:5){
+  #log_analysis(paste(file_dir, list.files('E:/College/UC Davis/STA141B/HW2/', pattern = '.+csv')[[i]], sep=''))
+  log_analysis(paste(file_dir, list.files(file_dir, pattern = '.+csv')[[i]], sep=''))
+  log_sumr(paste(file_dir, list.files('E:/College/UC Davis/STA141B/HW2/', pattern = '.+csv')[[i]], sep=''))
+  sudo_sumr(paste(file_dir, list.files('E:/College/UC Davis/STA141B/HW2/', pattern = '.+csv')[[i]], sep=''))
+}
+```
+
+
+WORKS CITED:
+[1] https://stat.ethz.ch/pipermail/r-help/2011-December/298222.html
+[2] https://stackoverflow.com/questions/6451152/how-to-catch-integer0
+[3] https://www.statology.org/r-remove-last-character-from-string/
+[4] https://datatofish.com/export-dataframe-to-csv-in-r/
+[5] https://stackoverflow.com/questions/1923273/counting-the-number-of-elements-with-the-values-of-x-in-a-vector
+[6] https://www.guru99.com/r-sort-data-frame.html
+[7] https://stackoverflow.com/questions/15201305/how-to-convert-a-list-consisting-of-vector-of-different-lengths-to-a-usable-data
+[8] https://stackoverflow.com/questions/28370249/correct-way-to-specifiy-optional-arguments-in-r-functions

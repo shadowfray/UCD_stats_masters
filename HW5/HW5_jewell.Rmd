@@ -1,0 +1,390 @@
+---
+title: "HW5 - Optimize - Jewell"
+author: "Benjamin Jewell"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+
+```{r}
+library(ggplot2)
+library(knitr)
+library(XML)
+utf_chars = readRDS('E:\\College\\UC Davis\\STA141B\\HW5\\utf_list')
+mtxt = read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncoded_mini.txt')
+full_txt = read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncodedString.txt')
+```
+
+The Original URLdecode function
+
+```{r}
+start_URLbase = Sys.time()
+URLdecode <- function (URL) 
+{
+    vapply(URL, function(URL) {
+        x <- charToRaw(URL)
+        pc <- charToRaw("%")
+        out <- raw(0L)
+        i <- 1L
+        
+        while (i <= length(x)) {
+            if (x[i] != pc) {
+                out <- c(out, x[i])
+                i <- i + 1L
+            }
+            else {
+                y <- as.integer(x[i + 1L:2L])
+                y[y > 96L] <- y[y > 96L] - 32L
+                y[y > 57L] <- y[y > 57L] - 7L
+                y <- sum((y - 48L) * c(16L, 1L))
+                out <- c(out, as.raw(as.character(y)))
+                i <- i + 3L
+            }
+        }
+        rawToChar(out)
+    }, character(1), USE.NAMES = FALSE)
+}
+#URLdecode(read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncoded_mini.txt'))
+#URLdecode('Hello%20there%20')
+#URLdecode(mtxt)
+#URLdecode('%58%E2%80%93A')
+#print(Sys.time() - start_URLbase)
+```
+
+URLbase Conversion
+
+```{r}
+
+start_URLbase = Sys.time()
+URLdecode_v2 <- function (URL) 
+{
+    vapply(URL, function(URL) {
+        x <- charToRaw(URL)
+        pc <- charToRaw("%")
+        out <- raw(length = nchar(URL))
+        i <- 1L
+        j <- 1L
+        while (i <= length(x)) {
+            if (x[i] != pc) {
+                out[j] = x[i]
+                i <- i + 1L
+            }
+            else {
+                y <- as.integer(x[i + 1L:2L])
+                y[y > 96L] <- y[y > 96L] - 32L
+                y[y > 57L] <- y[y > 57L] - 7L
+                y <- sum((y - 48L) * c(16L, 1L))
+                out[[j]] <- as.raw(as.character(y))
+                i <- i + 3L
+            }
+            j <- j + 1L
+        }
+        rawToChar(out)
+    }, character(1), USE.NAMES = FALSE)
+}
+#URLdecode_v2(read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncodedString.txt'))
+#URLdecode_v2('20%20k%20j')
+#URLdecode_v2(full_txt)
+#print(Sys.time() - start_URLbase)
+```
+
+TApply Approach - Failed Vectorization
+
+```{r}
+start_URLbase = Sys.time()
+URLdecode_tp <- function(URL){
+        r <- charToRaw(URL)
+        pc <- charToRaw("%")
+        
+        mt = matrix(data = FALSE, nrow = 3, ncol = (nchar(URL)+2))
+        mt[1,3:(nchar(URL)+2)] = c(r == pc)
+        mt[2,2:(nchar(URL)+1)] = c(r == pc)
+        mt[3,1:(nchar(URL)+0)] = c(r == pc)
+        mt = colSums(mt)
+        
+        m = cumsum(as.numeric(!as.logical(mt)) + c((r == pc), 0, 0))
+        
+        k = tapply(r, m[1:(length(r))], function(x) 
+            if (length(x) > 1){
+                y <- as.integer(x[2:3])
+                y[y > 96L] <- y[y > 96L] - 32L
+                y[y > 57L] <- y[y > 57L] - 7L
+                x <- as.raw(as.character(sum((y - 48L) * c(16L, 1L))))
+            } else {x = x})
+        
+        #print(k)
+        #print('---')
+        
+        rawToChar(unlist(k))
+}
+
+#URLdecode_tp(mtxt)
+#URLdecode_tp('mk%20k%24j')
+#print(Sys.time() - start_URLbase)
+```
+
+Vectorized Approach
+
+```{r}
+#mtxt = read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncoded_mini.txt')[[1]]
+start_URLbase = Sys.time()
+URL_vec <- function(URL){vapply(URL, function(URL) {
+        r <- as.integer(charToRaw(URL))
+        pc <- charToRaw("%")
+        
+        pnums <- (c(0,(r==pc),0) + c(0,0,(r==pc)))[1:length(r)]
+        
+        y = r[as.logical(pnums)]
+        y[y > 96L] <- y[y > 96L] - 32L
+        y[y > 57L] <- y[y > 57L] - 7L
+        y = (y-48L) * c(16L, 1L)
+        attr(y, 'dim') = c(2,sum(pnums)/2)
+        y = colSums(y)
+        print(y)
+        
+        r = r[!as.logical(pnums)]
+        r[r == pc] = y
+        
+        
+        rawToChar(as.raw(as.character(r)))
+    }, character(1), USE.NAMES = FALSE)
+}
+
+#URL_vec(mtxt)
+#URL_vec('mk%20k%24j')
+URL_vec('a%20b%24c')
+#URL_vec(full_txt)
+#print(Sys.time() - start_URLbase)
+
+```
+
+===== TESTING OUR RESULTS =====
+
+Generating some data
+
+```{r}
+#All utf_chars encoded
+utf_chars = readRDS('E:\\College\\UC Davis\\STA141B\\HW5\\utf_list')
+
+#Random letters
+words1 = sample(letters, 1000, replace = TRUE)
+
+#Random words of length 2
+words2 = list()
+for (i in 1:1000){
+  words2[i] = paste(unlist(sample(letters, 2, replace = TRUE)), collapse='')
+}
+```
+
+Generate Data
+
+```{r}
+gen_data <-function(n, stepfactor = 1L){
+  data = list()
+  all_chars = append(rep(letters, 3), append(rep(LETTERS,3), append(rep(c(0:9),3) , utf_chars)))
+  
+  j = 1L
+  for (i in seq(1, n)){
+    data[i] = paste(sample(all_chars, j, replace = TRUE), collapse ='')
+    j = j + 500L*stepfactor
+  }
+  data[i + 1] = paste(sample(all_chars, j + 10000, replace = TRUE), collapse ='')
+  data[i + 2] = paste(sample(all_chars, j + 20000, replace = TRUE), collapse ='')
+  
+  data
+}
+
+```
+
+The timing function
+
+```{r}
+time_decode <- function(func, #the Decoder function used
+                        n,     #Num of data points (can get a str of len 3*n to 9*n long)
+                        test_data #the data we use
+                        )
+  {
+  
+  run_time = matrix(data = rep(-1, n*3), ncol=n, nrow=3)
+  
+  for (i in 1:length(test_data)){
+    #ttdd <<- test_data[i]
+    start_time = Sys.time()
+    run_time[1, i] = func(test_data[i])       #Results
+    run_time[2, i] = Sys.time() - start_time  #Run Time
+    run_time[3, i] = test_data[[i]]           #Test data
+  }
+  
+  run_time
+}
+
+#time_decode(URL_vec, 10, list('a%20b'))
+# run_time = time_decode(URLdecode_v2, 1000)
+# plot(lapply(run_time[3,], nchar), run_time[2,])
+```
+
+Compare results with URLdecode results We do so by using the results
+from our URLdecode runtime to avoid running it twice
+
+```{r}
+test_results <- function(results_mtrx, truth_mtrx){
+  #truth_val = lapply(results_mtrx[3,], URLdecode)
+  
+  if (sum(truth_mtrx[1, ] == results_mtrx[1, ]) != length(truth_mtrx[1, ])){
+    TRUTH_VAL <<- trtuth_mtrx[1,]
+    PRED_VAL <<- results_mtrx[1,]
+    warning('Values do not match! Saving variables as TRUTH_VAL & PRED_VAL')
+  }
+}
+
+#test_results(time_decode(URLdecode_v2, 2000))
+```
+
+Main Control Unit
+
+```{r}
+main <- function(n){
+  
+  runtimes <- matrix(rep(-1, n*4), nrow = 4, ncol = n)
+  
+  #Generate the data
+  data2test = gen_data(n)
+  runtimes[4, ] = as.numeric(lapply(data2test, nchar))
+  
+  #URLdecode basetime
+  base_de <- time_decode(URLdecode, n, data2test)
+      #We don't test results because URLdecode is our 'Truth Value(s)'
+  runtimes[1, ] <- as.numeric(base_de[2, ])
+  
+  #URLdecode_v2 values
+  redo_de <- time_decode(URLdecode_v2, n, data2test)
+  test_results(redo_de, base_de)
+  runtimes[2, ] <- as.numeric(redo_de[2, ])
+  
+  #URL_vec values
+  vect_de <- time_decode(URL_vec, n, data2test)
+  test_results(vect_de, base_de)
+  runtimes[3, ] <- as.numeric(vect_de[2, ])
+
+  return(runtimes)
+}
+
+t_data = main(500)
+
+t_data = as.data.frame(t(t_data)) #= as.numeric(t_data)
+colnames(t_data) <- c('base_t', 'v2_t', 'vector_t', 'nchar')
+head(t_data)
+
+#[3] color blind palette
+ggplot(data = t_data, aes(x = nchar, y = base_t)) + 
+  geom_point(color = "#CC6677") + #UrlDecode
+  geom_point(aes(y = v2_t), color = "#88CCEE") + #URLdecode_v2
+  geom_point(aes(y = vector_t), color = "#DDCC77") + #URL_vec
+  labs(title = 'Run time of URL Decoding Variants', 
+       x= 'Number of characters decoded', 
+       y= 'Decode run time (sec)', 
+       color = "Function") +
+  scale_color_manual(name = "Function",
+                     breaks = c("URLdecode", "URLdecode_v2", "URL_vec"), 
+                     values = c("#CC6677", "#88CCEE", "#DDCC77")) #[5] Adding legend
+
+```
+
+Regression / Prediction:
+
+```{r}
+#Base Model
+t_data$nchar_sqr = t_data$nchar ^ 2
+base_model_lm <- lm(base_t ~ nchar + nchar_sqr, data=t_data)
+summary(base_model_lm)
+#[6][7] quadratic curve
+ggplot(data = base_model_lm, aes(x = nchar)) + 
+     geom_point(aes(y = base_t), color = "#CC6677") +
+     stat_smooth(aes(y = base_t), 
+                 method = "lm", 
+                 formula = y ~ poly(x, 2), 
+                 size = 1,
+                 color = 1) +
+    labs(title = 'Regression Line of Base Decode', 
+       x= 'Number of characters decoded', 
+       y= 'Decode run time (sec)')
+
+#v2 Model
+v2_lm <- lm(v2_t ~ nchar, data = t_data)
+summary(v2_lm)
+ggplot(data = v2_lm$model, aes(x = nchar, y = v2_t)) +
+    geom_point(color = "#88CCEE") +
+    stat_smooth(method = "lm", size = 1, color = 1) +
+    labs(title = 'Regression Line of v2 Decode', 
+       x= 'Number of characters decoded', 
+       y= 'Decode run time (sec)')
+
+
+#vector Model
+vec_lm <- lm(vector_t ~ nchar, data = t_data)
+summary(vec_lm)
+ggplot(data = vec_lm, aes(x = nchar, y = vector_t)) +
+    geom_point(color = "#DDCC77") +
+    stat_smooth(method = "lm", size = 1, color = 1) +
+    labs(title = 'Regression Line of Vector Decode', 
+       x= 'Number of characters decoded', 
+       y= 'Decode run time (sec)')
+
+
+```
+
+Mega String Time Comparing:
+
+```{r}
+#full_txt = read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncodedString.txt')
+#mini_txt = read.table('E:\\College\\UC Davis\\STA141B\\HW5\\PercentEncoded_mini.txt')
+
+#Making our Regression Prediciton
+nchar(full_txt) #591977 characters
+t_titles = c('URLdecode', 'URLdecode_v2', 'URL_vec')
+decode_fcts = c(URLdecode, URLdecode_v2, URL_vec)
+
+pred_times = data.frame(matrix(data = NA, nrow = 3, ncol = 3))
+colnames(pred_times) <- c("Model", "Predicted Run Times (sec)", "Real Run Times (sec)")
+for (i in 1:3){pred_times[i,1] = t_titles[i]}
+pred_times[1,2] = predict(base_model_lm, data.frame(nchar = 591977, nchar_sqr = 591977^2 ))[[1]]
+pred_times[2,2] = predict(v2_lm, data.frame(nchar = 591977), nchar_sqr = 591977^2)[[1]]
+pred_times[3,2] = predict(vec_lm, data.frame(nchar = 591977))[[1]]
+
+for (i in 1:3){
+  t0 = Sys.time()
+  decode_fcts[[i]](full_txt)
+  pred_times[i, 3] = difftime(Sys.time(), t0, units = "secs")[[1]]
+}
+
+kable(pred_times)
+```
+
+[1]
+<https://statisticsglobe.com/count-occurrence-of-certain-character-in-string-in-r>
+
+[2]
+<https://statisticsglobe.com/apply-functions-in-r/#example-6-mapply-function>
+
+[3]
+<https://stackoverflow.com/questions/57153428/r-plot-color-combinations-that-are-colorblind-accessible>
+
+[4] <https://www.statology.org/r-create-vector-of-zeros/>
+
+[5]
+<https://stackoverflow.com/questions/23635662/editing-legend-text-labels-in-ggplot>
+
+[6]
+<https://stackoverflow.com/questions/42764028/fitting-a-quadratic-curve-in-ggplot>
+
+[7] <https://thomasadventure.blog/posts/ggplot-regression-line/>

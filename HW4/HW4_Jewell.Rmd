@@ -1,0 +1,835 @@
+---
+title: "HW04 - Web Scrapping"
+author: "Benjamin Jewell"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+URL: <https://stackoverflow.com/questions/tagged/r> Pages Example:
+<https://stackoverflow.com/questions/tagged/r?tab=newest&page=3&pagesize=15>
+
+Set up
+
+```{r}
+library(XML)
+library(xml2)
+library(httr)
+library(RCurl)
+library(knitr)
+SO_url = 'https://stackoverflow.com/questions/tagged/r'
+base_url = 'https://stackoverflow.com'
+```
+
+## TASKS:
+
+### For Each Question:
+
+1 The number of views of the question + search page
+
+1 The number of votes + search page
+
+1 Text of the question --\> Title? + question page
+
+1 Tags of question + search page
+
+1 When the question was posted + search page
+
+1 The user/display name of the poster + search page
+
+1 Their reputation + search page
+
+1 How many Gold/Silver/Bronze badges they have + question page
+
+1 Who edited the question, when? + question page
+
+### For Each Answer:
+
+1 The text + question page
+
+1 The poster + question page
+
+1 When they posted + question page
+
+1 Their Reputation + question page
+
+1 Their badge info + question page
+
+### For ALL Comment:
+
+1 The Text + Sub-comments page
+
+1 Who commented + Sub-comments page
+
+1 When they posted + Sub-comments page
+
+# Functions
+
+Read URL
+
+```{r}
+#read any html page
+rhtml <- function(url){
+  Agent = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2227.0 Safari/537.36"
+  z = GET(url, user_agent(Agent))#, verbose(info = FALSE))
+  return(htmlParse(z))
+}
+```
+
+Get the unique ID of each question
+
+```{r}
+#Get Question post ID from the search page
+get_question_id <- function(doc){
+  q_id = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/@data-post-id")
+  q_id = lapply(q_id, as.numeric)
+  return(q_id)
+}
+# i = get_question_id(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50'))
+# unique(lapply(i, typeof))
+# unique(lapply(i, class))
+# length(i)
+# i
+```
+
+Get the total number of views
+
+```{r}
+#Get the number of views per question from the search page
+get_views <- function(doc){
+  view_count = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/div/div[contains(@title, 'views')]/span[not(contains(., 'views'))]/text()")
+  view_count = lapply(view_count, function(x) as.character(xmlValue(x)))
+  return(view_count)
+}
+# e = "https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50"
+# v = get_views(rhtml(e))
+# unique(lapply(v, typeof))
+# unique(lapply(v, class))
+# v
+```
+
+Get the total number of votes
+
+```{r}
+#Get number of votes per question from the search page
+get_votes <- function(doc){
+  votes_count = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/div/div[contains(@title, 'Score of')]/span[not(contains(., 'vote'))]/text()")
+  return(xmlValue(votes_count))
+}
+# v = get_votes(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50'))
+# unique(lapply(v, typeof))
+# unique(lapply(v, class))
+# v
+```
+
+Get the text body
+
+```{r}
+#Get the post body text from a question, from a question page
+get_body <-function(doc){
+  body = getNodeSet(doc, "//div[contains(@class, 'postcell post-layout--right')]/div[contains(@class, 's-prose ')]")
+  return(xmlValue(body))
+}
+#get_body(rhtml('https://stackoverflow.com/questions/76346497/error-penman-monteith-fao56-reference-crop-et'))
+```
+
+Get the tags
+
+```{r}
+#Get the tags per post from the search page
+get_tags <- function(doc){
+  t_str = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/div/div/div[contains(@class, 'js-tags')]/@class")
+  #Not the cleanest way to extrac the tags, but it seems to work
+  #[5] collapse string-lists together
+  tags = sapply(t_str, function(x) regmatches(x, gregexpr('(?<= t-)[^ ]+', x, perl = TRUE)))
+  tags = lapply(tags, function(x) paste(x, collapse = ','))
+  tags = lapply(tags, as.character)
+  
+  return(as.character(tags))
+}
+
+# t = get_tags(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50'))
+# length(t)
+# unique(lapply(t, typeof))
+# unique(lapply(t, class))
+# t
+```
+
+When were the questions posted?
+
+```{r}
+#Get the post time per question from the search page
+get_Qtime <- function(doc){
+  #time = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/div/div/div/time/span/@title")
+  time = getNodeSet(doc, "//div[contains(@id, 'question-summary')]//div/time/span[@class = 'relativetime']/@title | //div[contains(@title, 'community owned ')]/text()[1]")
+  
+  #debug for when last page is empty - avoids crash
+  if (length(time) == 0){return()}
+  
+  #debug for when the last page has strange info = a community post
+  for (i in 1:length(time)){
+  if (typeof(time[[i]]) == "externalptr"){
+      time[[i]] = "2009-11-08 07:33:00Z"
+    } else {
+      time[[i]] = as.character(time[[i]])
+    }}
+  
+  return(paste(time))
+}
+
+# t = get_Qtime(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9813&pagesize=50'))
+# unique(lapply(t, typeof))
+# unique(lapply(t, class))
+# print(t)
+# length(t)
+```
+
+Get Username & Id
+
+```{r}
+#Get the question poster username from the search page
+get_Qusername <- function(doc){
+  username = getNodeSet(doc, "//div[contains(@id, 'question-summary')]//div[contains(@class, 's-user-card--link')]/a/text()")
+  username = xmlValue(username)
+  
+  #Some usernames aren't links anymore, so we get a 2nd set to compare
+  usernames_v2 = list()
+  deadusername = xmlValue(getNodeSet(doc, "//div[contains(@id, 'question-summary')]//div[contains(@class, 's-user-card--link')]/text()"))
+  for (i in 1:length(deadusername)){
+    if (nchar(trimws(deadusername[[i]])) > 0){
+    usernames_v2 = append(usernames_v2, trimws(deadusername[[i]]))}
+  }
+  
+  return(as.character(append(username, usernames_v2)))
+}
+
+#Get the question ID per post from the search page
+get_Qid <- function(doc){
+  #includes an option to get community posts
+  id = getNodeSet(doc, "//div[contains(@id, 'question-summary')]//a/@data-user-id | //div[contains(@id, 'question-summary')]//span/@data-user-id | //div[contains(@id, 'question-summary')]//div[contains(@title, 'community owned')]/text()[1]")
+  
+  #handles when there are "Community Wiki Posts"
+  for (i in 1:length(id)){
+  if (typeof(id[[i]]) == "externalptr"){
+      id[[i]] = "0"
+    } else {
+      id[[i]] = as.character(id[[i]])
+    }}
+  
+  return(as.numeric(id))
+}
+
+# u = get_Qusername(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50'))
+# print(unique(lapply(u, typeof)))
+# unique(lapply(u, class))
+# print(length(u))
+# print(u)
+# 
+# u = get_Qid(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50'))
+# print(unique(lapply(u, typeof)))
+# unique(lapply(u, class))
+# print(length(u))
+# print(u)
+```
+
+Get reputation
+
+```{r}
+#Get the reputation per question from the search page
+get_reputation <- function(doc){
+  n_users = getNodeSet(doc, "//div[contains(@id, 'question-summary')]//div[@class = 's-user-card--info']//li/span/@title | //div[contains(@id, 'question-summary')]//div[@class = 's-user-card--info' and count(./ul) = 0]/text()[1]")
+  
+  #Turns all nodes that don't have a reputation score blank OR gets Rep Score
+  for (i in 1:length(n_users)){
+    if (typeof(n_users[[i]]) == "externalptr"){
+      n_users[[i]] = trimws(xmlValue(n_users[[i]]))
+    } else {
+      n_users[[i]] = gsub('reputation score ', '', as.character(n_users[[i]]))
+    }
+  }
+  
+  #Finds rep a 2nd more reliable way to replace any missing from n_user rep
+  old_rep = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/div/div/div/div/ul/li/span/text()")
+
+  if (length(n_users) != length(old_rep)){warning(paste('Reputation scores do not match! Nrep:', length(n_users), 'OldRep:', length(old_rep)))}
+  
+  #replaces any missing rep scores with the rep found via old_rep
+  for (i in 1:length(old_rep)){
+    if (nchar(n_users[[i]]) == 0){n_users[[i]] = xmlValue(old_rep[[i]])}
+  }
+  
+  n_users = lapply(n_users, function(x) if (nchar(x) == 0){x = 0} else {x=x})
+  
+  return(as.character(n_users))
+}
+# r = get_reputation(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9813&pagesize=50'))
+# print(unique(lapply(r, typeof)))
+# unique(lapply(t, class))
+# print(length(r))
+# r
+```
+
+Get badges
+
+```{r}
+#Gets badges per user from the question page
+get_badges_author <- function(doc){
+  #bdg = getNodeSet(doc, "//div[@class = 'post-signature owner flex--item']")
+  b_bdg = getNodeSet(doc, "//div[@class = 'post-signature owner flex--item']/div[contains(@class, 'user-info')]//div[contains(@itemprop, 'author')]//span[@class = 'badge3']/ancestor::span[contains(@title, 'badges')]/span[@class = 'badgecount']/text()")
+  
+  s_bdg = getNodeSet(doc, "//div[@class = 'post-signature owner flex--item']/div[contains(@class, 'user-info')]//div[contains(@itemprop, 'author')]//span[@class = 'badge2']/ancestor::span[contains(@title, 'badges')]/span[@class = 'badgecount']/text()")
+  
+  g_bdg = getNodeSet(doc, "//div[@class = 'post-signature owner flex--item']/div[contains(@class, 'user-info')]//div[contains(@itemprop, 'author')]//span[@class = 'badge1']/ancestor::span[contains(@title, 'badges')]/span[@class = 'badgecount']/text()")
+  
+  #If a user doesnt have a specific type of badge they get 0
+  if (length(b_bdg) < 1){b_bdg = 0} else (b_bdg = xmlValue(b_bdg))
+  if (length(s_bdg) < 1){s_bdg = 0} else (s_bdg = xmlValue(s_bdg))
+  if (length(g_bdg) < 1){g_bdg = 0} else (g_bdg = xmlValue(g_bdg))
+  return(c(b_bdg, s_bdg, g_bdg))
+}
+#get_badges_author(q_doc)
+```
+
+Finding who edited the question & when
+
+```{r}
+#Gets the time and editors of a post from a question page
+get_edits <- function(doc){
+  edit_time = getNodeSet(doc, "//div[@class = 'user-action-time']/a[contains(@title, 'show all edits to this post')]/span/@title")
+  #print(edit_time)
+  
+  #Is there an edit? 
+  if (length(edit_time) > 0){
+    #Is the editor the original author?
+    author = getNodeSet(doc, "//div[@class = 'post-signature flex--item']//div[@itemprop = 'author']")
+    #If the author edited this:
+    if (length(author) > 0){ 
+      #the original author
+      editor = xmlValue(getNodeSet(doc, "//div[@class = 'post-signature owner flex--item']//div[@class = 'user-details']/a/text()"))
+    } else {
+      #There is another user as our editor, AKA not the author
+      editor = xmlValue(getNodeSet(doc, "//div[@class = 'post-signature flex--item']//div[@class = 'user-details']/a/text()"))
+    }
+  } else {
+    editor = NA
+    edit_time = NA
+  }
+  
+  return(list(editor, paste(edit_time)))
+}
+#get_edits(q_doc)
+```
+
+Question Page Reading
+
+```{r}
+#Reads a given question URL
+question_read <- function(url, qst_df, i){
+  Sys.sleep(1) # Ensures we don't query SO too quickly
+  qdoc = rhtml(url)
+  
+  #pastes the URL for debugging purposes
+  print(paste('Current URL:', url))
+  
+  #Extract data from the question page
+  body = get_body(qdoc)
+  auth_badges = get_badges_author(qdoc)
+  edit_gen_info = get_edits(qdoc) 
+  editor = edit_gen_info[[1]]
+  edit_time = paste(edit_gen_info[[2]], collapse =', ')
+  
+  #print(c(length(body),))
+  
+  #Insert the data into the empty data frame
+  qst_df$body[i] = body
+  qst_df$badgeGold[i] = auth_badges[[3]]
+  qst_df$badgeSilver[i] = auth_badges[[2]]
+  qst_df$badgeBronze[i] = auth_badges[[1]]
+  qst_df$Editor[i] = editor
+  qst_df$EditTime[i] = edit_time
+  
+  #print(qst_df)
+ 
+  return(list(qst_df, qdoc))
+}
+
+#question_read('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9810&pagesize=50', 1, 1)
+```
+
+Read the answers from each page
+
+Minor Issue: There are two values for the Reputation, one is abbreviated
+once it is above like 4 characters long so we have to extract the
+reputation from a \@title value instead. However when the Reputation is
+like 4 characters or less that \@title value is no longe present so we
+have to get the normal value.
+
+```{r}
+#Reads a question page and returns it 
+answer_read <- function(doc, i){
+    #saves the link for debugging purposes
+    why <<- getNodeSet(doc, "//head/link[@rel = 'canonical']/@href")
+    #print(why)
+    
+    # --- The text ---
+    a_text = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@itemprop = 'text']")
+    a_text = lapply(a_text, function(x) as.character(xmlValue(x)))
+    #print(paste('Text Length :', length(a_text)))
+    
+    
+    # ---The poster ---
+    a_poster = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/a/text() |//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details']/span[@class = 'community-wiki']/text()")
+    a_poster = lapply(a_poster, function(x) trimws(xmlValue(x)))
+    
+    #Certain users arent in the SO database so we handle them here
+    a_dead_poster = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/text()[1]")
+    a_dead_poster = lapply(a_dead_poster, function(x) trimws(xmlValue(x)))
+    #replace any missing values with the dead author
+    
+    if (length(a_dead_poster) < 1){a_dead_poster = c('')} #avoids crashing the loop when there are 0 answers
+    for (i in 1:length(a_dead_poster)){
+      if (nchar(a_dead_poster[[i]]) > 0){
+        a_poster = append(a_poster, a_dead_poster[[i]], after = (i - 1))
+      }}
+    
+    
+    # --- When they posted ---
+    a_time = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-action-time']/span/@title")
+    a_time = lapply(a_time, as.character)
+    #Deals with community wiki posts
+    community_time = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details']/span[@class = 'community-wiki']/@title")
+    community_time = lapply(community_time, function(x) gsub('(This post is community owned as of )?(. Votes do not generate reputation, and it can be edited by users with 100 rep)?', '', as.character(x)))
+    community_time = lapply(community_time, function(x) gsub('at', '', x))
+    
+    c = 1
+    if (length(community_time) > 0){for (i in 1:length(a_poster)){
+      if (a_poster[[i]] == 'community wiki'){
+        a_time = append(a_time, community_time[[1]], after = (i - 1))
+        c = c + 1
+      }
+    }}
+    
+    
+    # --- Their Reputation ---
+    #Version One
+    a_rep = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/div[@class = '-flair']/span[@class = 'reputation-score']/@title | //div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details']/span[@class = 'community-wiki']/text()")
+    for (i in 1:length(a_rep)){
+      if (typeof(a_rep[[i]]) == 'externalptr'){
+        a_rep[[i]] = 'reputation score 0'}
+      }
+    #Reputation score is saved in a string for some reason so we pull out the number
+    a_rep = lapply(a_rep, function(x) as.numeric(gsub('(reputation score )?,?', '', x)))
+    
+    #Version Two, as per same situation as get_rep()
+    a_rep2 = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/div[@class = '-flair']/span[@class = 'reputation-score']/text()  | //div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details']/span[@class = 'community-wiki']/text()")
+    # print(paste('REP 2:', a_rep2)
+    a_rep2 = lapply(a_rep2, function(x) gsub('(reputation score )?,?', '', xmlValue(x))) 
+    # print(a_rep2)
+    #if there is no value from Version 1, then we use the Version 2 value instead
+    if (length(a_text) > 0){
+    for (i in 1:length(a_rep)){if (is.na(a_rep[[i]]) == TRUE){
+      a_rep[[i]] = a_rep2[[i]]}}}
+    
+    #Handles dead users Reputation
+    a_dead_rep = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/text()[1]")
+    a_dead_rep = lapply(a_dead_rep, function(x) trimws(xmlValue(x)))
+    if (length(a_dead_rep) < 1){a_dead_rep = c('')} #avoids crashing the loop when there are 0 answers
+    for (i in 1:length(a_dead_rep)){
+      if (nchar(a_dead_rep[[i]]) > 0){
+        a_rep= append(a_rep, 0, after = (i - 1))
+      }}
+    
+
+    # --- Their badge info ---
+    
+    #bronze badges
+    a_bronze = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/div[@class = '-flair']/span[contains(@title, 'bronze badges')]/@title")
+    a_bronze = lapply(a_bronze, function(x) as.numeric(gsub(' bronze badges', '', x)))
+    if (length(a_bronze) < length(a_poster)){
+      a_bronze = append(a_bronze, rep(0, length(a_poster) - length(a_bronze)))}
+    
+    #silver badges 
+    a_silver = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/div[@class = '-flair']/span[contains(@title, 'silver badges')]/@title")
+    a_silver = lapply(a_silver, function(x) as.numeric(gsub(' silver badges', '', x)))
+    if (length(a_silver) < length(a_poster)){
+      a_silver = append(a_silver, rep(0, length(a_poster) - length(a_silver)))}
+    
+    #gold badges
+    a_gold = getNodeSet(doc, "//div[@id = 'answers']/div[contains(@class, 'js-answer')]//div[@class = 'user-details' and @itemprop = 'author']/div[@class = '-flair']/span[contains(@title, 'gold badges')]/@title")
+    a_gold = lapply(a_gold, function(x) as.numeric(gsub(' gold badges', '', x)))
+    if (length(a_gold) < length(a_poster)){
+      a_gold = append(a_gold, rep(0, length(a_poster) - length(a_gold)))}
+    
+    
+    # --- question id ---
+    #for reference's sake we get the question ID to link them
+    a_id = rep(as.numeric(getNodeSet(doc, "//div[@class = 'question js-question']/@data-questionid")), length(a_poster))
+    
+    #debug statement
+    # print(c('AiD', length(a_id), 'text', length(a_text), 'poster', length(a_poster), 'time', length(a_time), 'rep', length(a_rep), 'brnz',  length(a_bronze), 'slvr', length(a_silver), 'Gold', length(a_gold)))
+    #print(a_poster)
+    
+    if (!(0 %in% c(length(a_id), length(a_text), length(a_poster), length(a_time), length(a_rep), length(a_bronze), length(a_silver), length(a_gold)))){
+    a_df = data.frame(a_id, unlist(a_text), unlist(a_poster), unlist(a_time), unlist(a_rep), unlist(a_bronze), unlist(a_silver), unlist(a_gold))
+    colnames(a_df) = c('ParentId', 'body', 'author', 'PostTime', 'Reputation', 'BronzeMedals', 'SilverMedals', 'GoldMedals')
+      return(a_df)
+    } else {return(FALSE)}
+}
+# a = answer_read(rhtml('https://stackoverflow.com/questions/2564258/plot-two-graphs-in-a-same-plot'),1)
+# lapply(a, length)
+# print(a)
+# as.data.frame(a)
+```
+
+Read Comments
+
+```{r}
+comment_preprocess <- function(qdoc){
+  #Gather all question+answer IDs into a singular list, allowing us to get all comments - even the hidden ones!
+  q_id = as.numeric(getNodeSet(qdoc, "//div/@data-questionid"))
+  a_ids = lapply(getNodeSet(qdoc, "//div/@data-answerid"), as.numeric)
+  comment_ids = append(q_id, a_ids)
+  
+  comment_data = list()
+  for (i in 1:length(comment_ids)){
+    Sys.sleep(1)
+    comment_url = paste('https://stackoverflow.com/posts/', comment_ids[[i]], '/comments', sep='')
+    
+    #[7] Exception handling when there are no comments
+    comment_data[[i]] = tryCatch({
+        comment_read(rhtml(comment_url), q_id, comment_ids[[i]])
+      }, error = function(e){})
+    }
+  
+  return(do.call("rbind", comment_data))
+}
+
+#Actually read the comment
+comment_read <- function(doc, q_id, parent_id){
+  # Text
+  c_text = xmlValue(getNodeSet(doc, "//li[contains(@class, 'comment js-comment')]//span[@class='comment-copy']"))
+  
+  # Comment User
+  c_user = xmlValue(getNodeSet(doc, "//a[contains(@class, 'comment-user')]/text()"))
+  
+  # Time
+  c_time = getNodeSet(doc, "//li[contains(@class, 'comment js-comment')]//span[@class = 'comment-date']//span/@title")
+  c_time = lapply(c_time, function(x) substr(as.character(x), 0, 20))
+  
+  c_df = data.frame(list(list(rep(q_id, length(c_user))), list(rep(parent_id, length(c_user))), c_user, unlist(c_time), c_text))
+  colnames(c_df) <- c('QuestionId', 'ParentId', 'UserId', 'CommentTime', 'body')
+  return(c_df)
+}
+#c = rhtml('https://stackoverflow.com/questions/2851327/combine-a-list-of-data-frames-into-one-data-frame-by-row')
+#comment_preprocess(c)
+
+# c = rhtml('https://stackoverflow.com/posts/2851327/comments')
+# print(c)
+# comment_read(c, 20, 22)
+```
+
+Get next page functions
+
+```{r}
+#Gets the URL for the next page
+get_next_page <- function(doc){
+  return(as.character(getNodeSet(doc, "//div[@id = 'mainbar']//a[@rel ='next']/@href")))
+}
+
+#Gets the URL for the "Last" page
+get_last_page <- function(doc){
+  #Adding extra loop to deal with the 'Last Page Mirage'
+  last_pg = as.character(getNodeSet(doc, "//div[@id = 'mainbar']//a[@rel = 'next']/preceding-sibling::a[1]/@href"))
+  #print(last_pg)
+  
+  #return('/questions/tagged/r?tab=newest&page=9800&pagesize=50')
+  
+  #If the last page is empty and has no value, retreat to a known page that works.
+  #This might not be exactly the last page, but since the "last page" is broken 
+  #I chose a number that is stable
+  if (length(last_pg) < 1){
+    print('Last page given broken! Retreating to stable backup at page 9800')
+    return('/questions/tagged/r?tab=newest&page=9800&pagesize=50')
+  }
+  
+  #Here we attempt to "retreat" and lower the page number to find a stable page
+  #only works if there are page buttons
+  mirage = TRUE
+  #try to query that page, see how many post ids there are
+  while (mirage == TRUE){
+    #print(last_pg)
+    Sys.sleep(1)
+    mdoc = get_question_id(rhtml(paste(base_url, paste(last_pg), sep='')))
+    if (length(mdoc) > 1){
+      return(last_pg)
+      mirage = FALSE
+    } else {
+      print('Mirage detected! Retreating!')
+        last_page = paste(base_url, paste(as.character(getNodeSet(doc, "//div[@id = 'mainbar']//a[@rel ='prev']/@href"))), sep='')
+      }
+  } 
+    
+  return(last_pg)
+}
+
+get_last_page(rhtml('https://stackoverflow.com/questions/tagged/r?tab=newest&page=9820&pagesize=50'))
+```
+
+Read Generic Search Page
+
+```{r}
+#Gathers all the information for a given page
+search_read <- function(url, n_depth){
+    doc = rhtml(url)
+    #return(doc)
+    
+    #Get all URLs on the page
+    #[2] Searching for specific values
+    #[3] How to use 'AND contains'
+    qlinks = getNodeSet(doc, "//div[contains(@id, 'question-summary')]/div/h3/a/@href")
+    
+    #Gathers the data from the search page
+    #[4] Coercing xml values into lists
+    id = get_question_id(doc)
+    views = get_views(doc)
+    votes = get_votes(doc)
+    body_txt = get_body(doc)
+    tags = get_tags(doc)
+    question_times = get_Qtime(doc)
+    Qusers = get_Qusername(doc)
+    Qids = get_Qid(doc)
+    reps = get_reputation(doc)
+    
+    # print(paste('ID', unique(lapply(id, class))))
+    # print(paste('Views', unique(lapply(views, typeof))))
+    # print(paste('votes', unique(lapply(id, typeof))))
+    # print(paste('question_times', unique(lapply(tags, typeof))))
+    # print(paste('Users', unique(lapply(Qusers, typeof))))
+    # print(paste('Qids', unique(lapply(Qids, typeof))))
+    # print(paste('Rep', unique(lapply(reps, typeof))))
+    # 
+    # print(c('id', length(id), 'view', length(views), 'votes', length(votes), 'tags', length(tags), 'qtime', length(question_times), 'qusers', length(Qusers), 'qIDs', length(Qids), 'rep', length(reps)))
+    
+    #print(reps)
+    
+    q_df_inc = data.frame(unlist(id), unlist(views), unlist(votes), unlist(tags), question_times, Qusers, Qids, reps, list(rep('', length(id))), list(rep('', length(id))),list(rep('', length(id))), list(rep('', length(id))), list(rep('', length(id))), list(rep('', length(id))))
+    
+    colnames(q_df_inc) <- c('id', 'views', 'votes', 'tags', 'question-time', 'OwnerUsername', 'ownerId', 'reputation', 'body', 'badgeGold', 'badgeSilver', 'badgeBronze', 'Editor', 'EditTime')
+    #print(q_df_inc)
+
+    #Queries each Question, updates the data frame with the missing infor about the poste
+    #Then returns the HTML of that page so we don't have to query it again - not the cleanest solution
+    q_html_objs = list()
+    for (i in 1:length(qlinks)){
+    q_query = question_read(paste(base_url, paste(qlinks[[i]]), sep=''),
+                  q_df_inc,
+                  i)
+    q_df_inc = q_query[[1]]
+    q_html_objs[[i]] = q_query[[2]]
+    }
+    #print(q_df_inc)
+    
+    # --- Answers ---
+    j = 1
+    ans_df_list = list()
+    #Takes each Question Page HTML obj and parses through to get the answer 
+    for (i in 1:length(q_html_objs)){
+      a_query = answer_read(q_html_objs[[i]], i)
+
+      if (length(a_query) > 1){
+        #print(length(a_query))
+        ans_df_list[[j]] = a_query
+        j = j + 1
+      }}
+    
+    a_df_inc = do.call("rbind", ans_df_list)
+    #print(a_df_inc)
+  
+    
+    # --- Comments ---
+    k = 1
+    com_df_list = list()
+    for (i in 1:length(qlinks)){
+      c_query = comment_preprocess(q_html_objs[[i]])
+      
+      if (length(c_query) > 1){
+        com_df_list[[k]] = c_query
+        k = k + 1
+      }}
+    
+    c_df = do.call("rbind", com_df_list)
+    #print(c_df)
+  
+    #Go to the next page of the search to n
+    #if page_depth == n, then go to last page
+  
+    #get page depth from URL using REGEX
+    page_depth = as.numeric(regmatches(url, gregexpr('(?<=page=)[0-9]+', url, perl = TRUE)))
+    
+    #define the next page
+    if (page_depth == n_depth){
+      #Return link to the last page
+      next_url = get_last_page(doc)
+      #next_url = TRUE
+    } else if (page_depth > n_depth){
+      #Once we are on the last page send the kill command back to the main module
+      next_url = TRUE 
+    }else {
+    #Else return link to the next page
+      next_url = get_next_page(doc)      
+    }
+    
+    return(list(q_df_inc, a_df_inc, c_df, next_url))
+}
+
+# init_url = 'https://stackoverflow.com/questions/tagged/r?tab=newest&page=9812&pagesize=50'
+# init_url = 'https://stackoverflow.com/questions/tagged/r?tab=newest&page=1&pagesize=50'
+# a = search_read(init_url, n_depth = 3)
+# qq = a[[1]]
+# qa = a[[2]]
+# qc = a[[3]]
+```
+
+### MAIN FUNCTION
+
+This is the function that we actually call to run our script.
+
+```{r}
+#Our main function, given a start page and a depth, it gathers data from that many
+#search pages + last and returns a list of dataframes
+scrape_so <- function(n_depth){
+  input_url = 'https://stackoverflow.com/questions/tagged/r?tab=newest&page=1&pagesize=50'
+  scrping = TRUE
+  questions_list = list()
+  answers_list = list()
+  comments_list = list()
+  
+  d = 1
+  while (scrping == TRUE){
+    search_data <<- search_read(input_url, n_depth)
+    # print(paste("SEARCH DATA LENGTH:", length(search_data)))
+    # print(c(typeof(search_data[[1]]), print(dim(search_data[[1]]))))
+    # print(c(typeof(search_data[[2]]), print(dim(search_data[[2]]))))
+    # print(c(typeof(search_data[[3]]), print(dim(search_data[[3]]))))
+    
+    questions_list[[d]] = search_data[[1]]
+    answers_list[[d]] = search_data[[2]]
+    comments_list[[d]] = search_data[[3]]
+    next_url = search_data[[4]]
+    d = d + 1
+    
+    if (next_url == TRUE){scrping = FALSE} #kill the loop once we are done
+
+    input_url = paste(base_url, paste(next_url), sep='')
+    print(paste('INPUT URL:', input_url))
+  }
+  
+  questions_list <<- questions_list
+  answers_list <<- answers_list
+  comments_list <<- comments_list
+  
+  # print('Shape of Questions:')
+  # print(lapply(questions_list, dim))
+  # print('Shape of Answers:')
+  # print(lapply(answers_list, dim))
+  # print('Shape of Comments:')
+  # print(lapply(comments_list, dim))
+  
+  q_df <<- do.call('rbind', questions_list)
+  a_df <<- do.call('rbind', answers_list)
+  c_df <<- do.call('rbind', comments_list)
+  
+  # print('experimental bind')
+  # exp_df <<- rbind(questions_list[[1]], questions_list[[2]])
+  # print(exp_df)
+  
+  # print(typeof(q_df))
+  # print(typeof(a_df))
+  # print(typeof(c_df))
+  
+  final_df = list()
+  final_df[[1]] = q_df
+  final_df[[2]] = a_df
+  final_df[[3]] = c_df
+  return(final_df)
+}
+
+final_dataframes = scrape_so(3)
+# write.csv(final_dataframes[[1]], 'E:\\College\\UC Davis\\STA141B\\HW4\\questions.csv')
+# write.csv(final_dataframes[[2]], 'E:\\College\\UC Davis\\STA141B\\HW4\\answers.csv')
+# write.csv(final_dataframes[[3]], 'E:\\College\\UC Davis\\STA141B\\HW4\\comments.csv')
+```
+
+Analysis graphs for questions:
+
+```{r}
+
+q_df = final_dataframes[[1]]
+a_df = final_dataframes[[2]]
+c_df = final_dataframes[[3]]
+
+#Plot votes
+plot(table(q_df$votes), main = 'Frequency of Votes', ylab = '# of votes', xlab = 'Vote Count')
+kable(table(q_df$votes), col.names = c('Vote Count', 'Frequency'))
+
+#Fix the abbreviations of the Views
+q_df$views = sapply(q_df$views, function(x) if (grepl('k', x) == TRUE){x = as.numeric(substr(x, 1, nchar(x) - 1)) * 1000} else {x = as.numeric(x)})
+plot(table(q_df$views), main = 'Distribution of Views', ylab = 'Frequency of Views', xlab = 'Number of Views')
+kable(table(q_df$views), col.names = c('View Count', 'Frequency'))
+
+q_df$reputation = sapply(q_df$reputation, function(x) if (grepl('k', x) == TRUE){x = as.numeric(substr(x, 1, nchar(x) - 1)) * 1000} else {x = x})
+q_df$reputation = sapply(q_df$reputation, function(x) if (nchar(x) < 1){x = 0} else {as.numeric(gsub(',', '', x))})
+plot(table(q_df$reputation), main = 'Distribution of Question Reputation', ylab = 'Frequency of QRep', xlab = 'Number of Rep')
+
+plot(table(q_df$badgeBronze), main = 'Distribution of Bronze Medals', ylab = 'Frequency')
+plot(table(q_df$badgeSilver), main = 'Distribution of Silver Medals', ylab = 'Frequency')
+plot(table(q_df$badgeGold), main = 'Distribution of Gold Medals', ylab = 'Frequency')
+```
+
+Answers Analysis
+
+```{r}
+a_df$Reputation = sapply(a_df$Reputation, function(x) if (grepl('k', x) == TRUE){x = as.numeric(substr(x, 1, nchar(x) - 1)) * 1000} else {x = x})
+a_df$Reputation = sapply(a_df$Reputation, function(x) if (nchar(x) < 1){x = 0} else {as.numeric(gsub(',', '', x))})
+plot(table(a_df$Reputation), main = 'Distribution of Question Reputation', ylab = 'Frequency of QRep', xlab = 'Number of Rep')
+
+plot(table(a_df$BronzeMedals), main = 'Distribution of Bronze Medals', ylab = 'Frequency')
+plot(table(a_df$SilverMedals), main = 'Distribution of Silver Medals', ylab = 'Frequency')
+plot(table(a_df$GoldMedals), main = 'Distribution of Gold Medals', ylab = 'Frequency')
+```
+
+Print out tables
+
+```{r}
+head(q_df)
+head(a_df)
+head(c_df)
+```
+
+[1]
+<https://stackoverflow.com/questions/32019566/r-xml-parse-for-a-web-address>
+
+[2]
+<https://stackoverflow.com/questions/1604471/how-can-i-find-an-element-by-css-class-with-xpath>
+
+[3]
+<https://stackoverflow.com/questions/18547410/xpath-with-multiple-contains-on-different-elements>
+
+[4]
+<https://stackoverflow.com/questions/11455590/parse-an-xml-file-and-return-an-r-character-vector>
+
+[5]
+<https://statisticsglobe.com/concatenate-vector-of-character-strings-in-r>
+
+[6]
+<https://stackoverflow.com/questions/34570860/add-nas-to-make-all-list-elements-equal-length>
+[
+
+7]
+<https://www.r-bloggers.com/2020/10/basic-error-handing-in-r-with-trycatch/>

@@ -1,0 +1,580 @@
+---
+title: "141B - SQL"
+author: "Benjamin Jewell"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load Libraries & make Connection
+
+```{r Setup}
+library(RSQLite)
+library(DBI)
+library(knitr)
+
+db = dbConnect(SQLite(), "E:\\College\\UC Davis\\STA141B\\HW3\\stats.stackexchange.db")
+```
+
+**Data Exploration:**
+
+Here we print out the schema of tables and their columns, since it's
+different than the website schema.
+
+```{r Schema}
+#list all tables for easy viewing
+dbListTables(db)
+db_summary = as.data.frame(do.call(cbind, lapply(dbListTables(db), function(x) dbListFields(db, x)[1:22])))
+colnames(db_summary) = dbListTables(db)
+db_summary
+```
+
+**General Note:** I will occasionally leave sections of commented code
+out here. These are highlighting the tables I used to "build up" to the
+final query I used.
+
+Answered Questions: {1,2,3,4,5,8,9,10,11,12,14,15,16}(13/13)
+
+**QUESTION 1:** How many users are there?
+
+It was found that there are 321,677 users, by counting the number of Ids
+from the Users table.
+
+```{r Q1}
+kable(dbGetQuery(db, 'SELECT COUNT(Id) FROM Users'), col.names = 'Number of users:')
+```
+
+**QUESTION 2:** How many users joined since 2020? (Hint: Convert the
+CreationDate to a year.)
+
+We found that 100796 users have joined from after the first second of
+January 1st, 2020. This was found by counting the CreationDate from the
+Users table where their CreationDate was greater than the start of 2020.
+
+```{r Q2}
+kable(dbGetQuery(db, 'SELECT COUNT(CreationDate) FROM Users WHERE JULIANDAY(CreationDate) > JULIANDAY("2020-01-01T00:00:01")'), col.names = "Number of users that have joined since the start of 2020")
+```
+
+**QUESTION 3:** How many users joined each year? Describe this with a
+plot, commenting on any anomalies.
+
+The CreationDate of each Users was selected and grouped by, counting how
+many joined each year. I calculated both the amount that joined each
+year and the cumulative sum so we can see the total number of users per
+year. It seems like the peak growth was in 2017 and has slowly been
+declining. I don't know enough about the statistics/stackoverflow
+community to comment on why it's slowly been going down other than to
+guess that as the product ages less people join. As for the large dip at
+the end however that is like explained because our table only has data
+up through March 5th of 2023, so it doesn't have a full year's worth of
+users joining. I imagine if you redid this with the data on December
+31st this year there would be much less of a drastic decrease.
+
+```{r Q3}
+join_df = dbGetQuery(db, 'SELECT strftime("%Y", CreationDate) AS yr, COUNT(*) AS yr_count FROM Users GROUP BY yr')
+
+plot(join_df, type='l', xlab = 'Year', ylab = 'Users', main='New Users per Year', ylim = c(0,350000), col=2)
+join_df[,"Cumulative Users"] = cumsum(join_df$yr_count) #[2] Cumsum new column
+lines(join_df$yr, join_df$`Cumulative Users`, col=4)
+legend(2011,240000, legend=c('Users joined per year', 'Cumulative users'), col=c(2,4), lty=c(1,1))
+
+kable(join_df, col.names = c('Year', 'New Users', 'Cumm. New Users'))
+```
+
+**QUESTION 4:** How many different types of posts are there in the Posts
+table?
+
+According to the PostTypeIdMap table there are 8 kinds of posts. However
+here where we sorted the posts by their PostTypeId and used COUNT to
+count them, only 7 of the 8 are present in this data. We used a join
+with PostTypeIdMap to print their appropriate types.
+
+```{r Q4}
+kable(dbGetQuery(db, 'SELECT PostTypeID, COUNT(*) As Count, PostTypeIdMap.value FROM Posts INNER JOIN PostTypeIdMap ON Posts.PostTypeId = PostTypeIdMap.id GROUP BY PostTypeID'), col.names = c('Id', 'Count', 'Value'))
+```
+
+**QUESTION 5:** How many posted questions are there?
+
+There are 204,370 questions asked in our data. We counted all posts
+where the PostTypeId = 1, which indicates it's a question and not
+something like an answer. Here we demonstrate that using PostTypeId = 1
+mapped to the 'Question' Id from PostTypeIdMap gives the same results.
+
+```{r Q5}
+#PostTypeId = 1 : Question Type
+kable(dbGetQuery(db, 'SELECT COUNT(PostTypeID) FROM Posts WHERE PostTypeID = 1'), col.names = 'Number of Questions Asked')
+
+kable(dbGetQuery(db, 'SELECT COUNT(PostTypeID) FROM Posts WHERE PostTypeID IN (SELECT id FROM PostTypeIdMap WHERE value = "Question")'), 
+      col.names = 'Number of Questions Asked via PostTypeIdMap')
+```
+
+**QUESTION 8:** How many answers are there?
+
+There are 197,928 answers in our data. We counted all posts where the
+PostTypeId = 2, which indicates it's an answer and not something like a
+question.
+
+```{r Q8}
+kable(dbGetQuery(db, 'SELECT COUNT(PostTypeID) FROM Posts WHERE PostTypeID = 2'), col.names = 'Number of Answers')
+
+kable(dbGetQuery(db, 'SELECT COUNT(PostTypeID) FROM Posts WHERE PostTypeID IN (SELECT id FROM PostTypeIdMap WHERE value = "Answer")'), col.names = 'Number of Answers via PostTypeIdMap')
+
+kable(dbGetQuery(db, 'SELECT SUM(AnswerCount) FROM Posts'), col.names = 'Verifying via Summing AnswerCount of all posts')
+```
+
+**QUESTION 9**: What's the most recent question (by date-time) in the
+Posts table?
+
+URL: <https://stats.stackexchange.com/questions/608405>
+
+ALT URL:
+<https://stats.stackexchange.com/questions/608458/are-there-any-methods-that-combine-mcmc-and-vi>
+
+How would we map a question in posts table to it's URL:
+
+Normally we could append the Post ID to
+<https://stats.stackexchange.com/questions/%7BId%7D> but it seems like
+not all posts exist. For example,
+<https://stats.stackexchange.com/questions/608405> doesn't exist and
+actually exist. However using Google with the contents of the post I was
+able to find a post that matched half of the new post and decided that
+would be more useful to us. You can't do much if the newest post just
+throws a 404 error at you.
+
+To find this we found the largest CreationDate to find the newest post
+is at 5:10:18 AM on March 5th, 2023, with ID 608405. I wasn't certain
+how to link them to the URL but figured there must be a way. In fact it
+turns out if you type in '<https://stats.stackexchange.com/questions/>'
+and then append the Post Id it will take you to that post. While this
+works for a lot of the Question IDS, it doesn't work for post 608405, as
+it just gives you a '404 Page not found' error. However if you search
+Google using the text from the body you can find a post that occurs
+later after our data set, Post #608458 which matches half of the body of
+Post #608405. Ultimately together these two posts give you the newest
+post in our data set, with one answer sticking to the "letter of the
+law", and another giving an answer that is more the "spirit of the law".
+
+```{r Q9}
+kable(dbGetQuery(db, 'SELECT MAX(CreationDate) FROM Posts'), col.names = 'Newest Post Time')
+kable(dbGetQuery(db, 'SELECT Id FROM Posts WHERE CreationDate = (SELECT MAX(CreationDate) FROM Posts)'), col.names = 'Newest Post ID')
+dbGetQuery(db, 'SELECT Body FROM Posts WHERE CreationDate = "2023-03-05T05:10:18.393"')[[1]]
+```
+
+**QUESTION 10:** Top 10 Questions Posted Users: How many questions did
+they post, usernames, when did they join, reputation, country?
+
+For Username we use Users.DisplayName, for their join date we use
+Users.CreationDate, for their reputation we use Users.Reputation and for
+country we use Users.Location (not all people list a country, but many
+do. As there's no Country value this seemed most appropriate.)
+
+We make a table with the top 10 users and how many posts they make,
+using an Inner Join with the Users table to filter to only having the to
+10 question posters.
+
+```{r Q10}
+#Double Checking the way we select the number of posts per user is correct
+ct = dbGetQuery(db, 'SELECT OwnerDisplayName, OwnerUserId, COUNT(*) FROM Posts GROUP BY OwnerUserId ')
+#There are 405220 posts, and we have that many here!
+sum(ct$`COUNT(*)`)
+
+#We ignore user28 since they have no ID so we can't look up any results on them
+dbGetQuery(db, 'SELECT OwnerDisplayName, OwnerUserId, COUNT(*) FROM Posts WHERE OwnerUserId <>"" GROUP BY OwnerUserId ORDER BY COUNT(OwnerUserId) DESC LIMIT 10;')
+
+#dbGetQuery(db, 'SELECT Id, DisplayName, CreationDate, Reputation, Location FROM Users WHERE Id IN (SELECT OwnerUserId FROM Posts WHERE OwnerUserId <>"" GROUP BY OwnerUserId ORDER BY COUNT(OwnerUserId) DESC LIMIT 10);')
+
+kable(dbGetQuery(db, 'SELECT Id, DisplayName, CreationDate, Reputation, Location, Freq 
+                 FROM Users 
+                 INNER JOIN (SELECT OwnerUserId, COUNT(*) as Freq FROM Posts WHERE OwnerUserId <>"" GROUP BY OwnerUserId ORDER BY COUNT(OwnerUserId) DESC LIMIT 10) AS Table2 ON Table2.OwnerUserId = Users.Id 
+                 WHERE Id IN (SELECT OwnerUserId FROM Posts WHERE OwnerUserId <>"" GROUP BY OwnerUserId ORDER BY COUNT(OwnerUserId) DESC LIMIT 10);'), 
+      col.names = c('Id', 'Username', 'Join Date', 'Reputation', 'Location', 'Post Count'))
+```
+
+**QUESTION 11:** Following from the previous questions, for the 10 users
+who posted the most questions, how many gold, silver and bronze badges
+does each of these 10 individuals have?
+
+Here we made an Inner Join between Badges.UserId and the Id of the top
+10 users, as we found them in the previous question. We group by their
+UserId and the Medal Classes to give our table, and use Count() to see
+how many of each they have.
+
+```{r Q11}
+kable(dbGetQuery(db, 'SELECT UserId, Class, COUNT(*) 
+                FROM Badges 
+                 INNER JOIN (SELECT OwnerUserId, COUNT(*) as Freq FROM Posts WHERE OwnerUserId <>"" GROUP BY OwnerUserId ORDER BY COUNT(OwnerUserId) DESC LIMIT 10) AS tp10 ON Badges.UserId = tp10.OwnerUserId 
+                 GROUP BY UserID, Class'), col.names = c('User Id', 'Medal Class', 'Frequency'))
+```
+
+**QUESTION 12:** For each of the following terms, how many questions
+contain that term: Regression, ANOVA, Data Mining, Machine Learning,
+Deep Learning, Neural Network.
+
+There are 54567 questions with these terms, either in the body or title.
+Here we use the LIKE term to look for how many posts contain the above
+key terms. The text of a question is found in Posts.Body, and the title
+via Posts.Title and we filter only using questions by only look at posts
+where PostTypeId = 1, marking it as a question.
+
+```{r Q12}
+#PostTypeId = 1 indicates that it is a question
+kable(dbGetQuery(db, "SELECT COUNT(Body) 
+                 FROM Posts 
+                 WHERE (
+                 (Body LIKE '%Regression%') OR (Body LIKE '%ANOVA%') OR (Body LIKE '%Data Mining%') OR (Body LIKE '%Machine Learning%') OR (Body LIKE '%Deep Learning%') OR (Body LIKE '% Neural Network%')
+                 OR
+                 (Title LIKE '%Regression%') OR (Title LIKE '%ANOVA%') OR (Title LIKE '%Data Mining%') OR (Title LIKE '%Machine Learning%') OR (Title LIKE '%Deep Learning%') OR (Title LIKE '% Neural Network%')) 
+                 AND Posts.PostTypeId = 1"), 
+      col.names = 'Number of Questions Containing the terms')
+```
+
+**QUESTION 14:** What is the date range for the questions and answers in
+this database?
+
+Here we use MIN and MAX to look at the oldest and newest questions in
+our database, filtering by PostTypeId as appropriate. Because we are
+using JULIANDAY to calculate this, our differences are given in Days.
+
+```{r Q14}
+#Questions
+kable(dbGetQuery(db, 'SELECT MAX(CreationDate) FROM Posts WHERE PostTypeId = 1'), col.names = 'Newest Question Time')
+kable(dbGetQuery(db, 'SELECT MIN(CreationDate) FROM Posts WHERE PostTypeId = 1'), col.names = 'Oldest Question Time')
+#Answers
+kable(dbGetQuery(db, 'SELECT MAX(CreationDate) FROM Posts WHERE PostTypeId = 2'), col.names = 'Newest Answer Time')
+kable(dbGetQuery(db, 'SELECT MIN(CreationDate) FROM Posts WHERE PostTypeId = 1'), col.names = 'Oldest Answer Time')
+
+#Difference [1]
+kable(dbGetQuery(db, 'SELECT JULIANDAY(MAX(CreationDate)) - JULIANDAY(MIN(CreationDate)) FROM Posts WHERE PostTypeId = 1'), col.names = 'Number of days between oldest and newest question')
+kable(dbGetQuery(db, 'SELECT JULIANDAY(MAX(CreationDate)) - JULIANDAY(MIN(CreationDate)) FROM Posts WHERE PostTypeId = 2'), col.names = 'Number of days between oldest and newest answer')
+```
+
+**QUESTION 15:** What Question has the most comments associated with it?
+How many answers are there?
+
+Here we look at the Post (#386853) with the MAX CommentCount associated
+with it. We do a small amount of fiddling in R to make our Answer Count
+display as 0 below rather than NA, as this post has no answer.
+
+```{r Q15}
+q15 = dbGetQuery(db, 'SELECT Id, CommentCount, AnswerCount FROM Posts WHERE CommentCount = (SELECT MAX(CommentCount) FROM Posts)')
+#Formatting:
+if (q15[1,3] == ''){q15[1,3] = 0}
+q15$AnswerCount = as.numeric(q15$AnswerCount)
+kable(q15, col.names = c('Post Id', 'Comment Count', 'Answer Count'))
+```
+
+**QUESTION 16:** How many comments are there across all posts? How many
+posts have a comment? What is the distribution of comments per question?
+
+This graph looks like it is likely Poisson or Exponentially distributed.
+This makes sense as it's more likely a post has a few comments then a
+huge amount of comments. We looked at the total CommentCount from the
+Posts table to find how many comments there are, making sure to filter
+out empty comments (aka no comments).
+
+```{r Q16}
+kable(dbGetQuery(db, 'SELECT SUM(CommentCount) FROM Posts WHERE CommentCount IS NOT NULL'), col.names = 'Total Comments')
+kable(dbGetQuery(db, 'SELECT COUNT(PostId) FROM Comments'), col.names = 'Total Comments via Comment Table')
+
+kable(dbGetQuery(db, 'SELECT COUNT(CommentCount) FROM Posts WHERE CommentCount IS NOT NULL'), col.names = 'Total Posts with 1+ Comment(s)')
+
+plot(dbGetQuery(db, 'SELECT CommentCount, COUNT(CommentCount) FROM Posts WHERE CommentCount IS NOT NULL GROUP BY CommentCount'), xlab = '# of Comments', ylab= 'Frequency', main='Distribution of # of Comments')
+```
+
+=== **REQUIRE QUESTIONS** ===
+
+**QUESTION 21:** Compute the table that contains: Question, Username of
+poster, when that user joined, their location, the date the question was
+first posted, accepted answer, when accepted answer was posted, name of
+the user who posted accepted answer
+
+For this question we had to combine several variables together to create
+our table. Here is a summary of what I values I thought we'd need: -
+Posts.Title - OwnerDisplayName - Users.CreationDate - Users.Location -
+CreationDate - AcceptedAnswerId --\> Posts.Body - AcceptedAnswerId --\>
+CreationDate - AcceptedAnswerId --\> OwnerDisplayName
+
+NOTE: Due to the size of table I used head() here to limit the size
+and allow my computer to actually knit the file. The query will work
+without it though if you want to see the whole table!
+
+```{r Q21}
+#Title, OwnerDisplayName, Users.CreationDate, Users.Location, CreationDate, AcceptedAnswerId-->Posts.Body, AcceptedAnswerId-->CreationDate, AcceptedAnswerId-->OwnerDisplayName 
+
+# dbGetQuery(db, 'SELECT p1.OwnerUserId, PUser.Id, p1.AcceptedAnswerId, ans.Id, ans.OwnerUserId, AUser.Id
+#           FROM Posts as p1
+#           INNER JOIN Users As PUser ON p1.OwnerUserId = PUser.Id
+#           INNER JOIN Users AS AUser ON ans.OwnerUserId = AUser.Id
+#           INNER JOIN Posts AS ans ON p1.AcceptedAnswerId = ans.Id
+#           ')
+
+head(dbGetQuery(db, 'SELECT p1.Title, PUser.DisplayName AS PosterUsername, PUser.CreationDate AS PosterJoinDate, PUser.Location AS PosterLocation, p1.CreationDate AS PostDate, ans.Body AS Answer, ans.CreationDate AS AnswerDate, AUser.DisplayName AS AnswerUsername
+          FROM Posts as p1
+          INNER JOIN Users As PUser ON p1.OwnerUserId = PUser.Id
+          INNER JOIN Users AS AUser ON ans.OwnerUserId = AUser.Id
+          INNER JOIN Posts AS ans ON p1.AcceptedAnswerId = ans.Id
+          ORDER BY PostDate
+          '))
+```
+
+**QUESTION 22:** Determine the users that have only posted questions and
+never answered a question? (Compute the table containing the number of
+questions, number of answers and the user's login name for this group.)
+How many are there?
+
+This question made me think I would need to compute a table of everyone
+who has posted a question. Then I would find the table of everyone who
+answered a question and drop everyone on the answer table from the
+questions table. The variables I saw as pertinent to this were: -
+OwnerUserId (Via GROUP BY OwnerUserId) - OwnerDisplayName -
+COUNT(Questions per User) - COUNT(Answers per User) \<-- If we did
+things right this should be NA or 0.
+
+NOTE: Due to the size of table I used head() here to limit the size
+and allow my computer to actually knit the file. The query will work
+without it though if you want to see the whole table!
+
+```{r Q22}
+# q22 = dbGetQuery(db, 'SELECT Users.Id, Users.DisplayName, COUNT(Posts.PostTypeId) AS AnswerCount
+#            FROM Posts
+#            INNER JOIN Users ON Posts.OwnerUserId = Users.Id
+#            WHERE Posts.PostTypeId = 2
+#            GROUP BY Users.Id')
+#q22
+
+# q22b = dbGetQuery(db, 'SELECT Users.Id, Users.DisplayName, COUNT(Posts.PostTypeId) AS QCount
+#            FROM Posts
+#            INNER JOIN Users ON Posts.OwnerUserId = Users.Id
+#            WHERE Posts.PostTypeId = 1
+#            GROUP BY Users.Id
+#            ')
+#q22b
+
+#Test to make sure we are selecting overlapping Users
+#intersect(q22$Id, q22b$Id)
+
+q22c = dbGetQuery(db, 'SELECT QstC.Id, QstC.DisplayName, QstC.QCount AS QuestionsAnswered, AnsC.AnswerCount
+                FROM (SELECT Users.Id, Users.DisplayName, COUNT(Posts.PostTypeId) AS AnswerCount
+           FROM Posts
+           INNER JOIN Users ON Posts.OwnerUserId = Users.Id
+           WHERE Posts.PostTypeId = 2
+           GROUP BY Users.Id) AS AnsC
+                RIGHT JOIN (SELECT Users.Id, Users.DisplayName, COUNT(Posts.PostTypeId) AS QCount
+           FROM Posts
+           INNER JOIN Users ON Posts.OwnerUserId = Users.Id
+           WHERE Posts.PostTypeId = 1
+           GROUP BY Users.Id) AS QstC
+                ON AnsC.Id = QstC.Id
+            WHERE AnsC.AnswerCount IS NULL
+            ORDER BY QuestionsAnswered
+                ')
+head(q22c)
+#sum(q22c[which(is.na(q22c$AnswerCount)),])
+```
+
+**QUESTION 23:** Compute the table with information for the 75 users
+with the most accepted answers. This table should include: User display
+name, creation date, location, number of badges they have won (and names
+of badges), the dates of the earliest and most recent accepted answer
+(as two fields)(the unique tags for all questions for which they had the
+accepted answer (as a single string))
+
+This was probably the table that took me the longest to understand how
+to group together. You can see multiple smaller tables I made below to
+try to figure out how to group the data. I decided to use Users as my
+"main" table, since a lot of the values seem to relate to that and we
+are finding the top 75 users. The hardest part for me was selecting the
+unique tags per user across questions they answered, as the DISTINCT
+value seems to apply to all selected columns. I'm sure there are more
+efficient ways to do this, but creating tables that acted as "keys" to
+INNER JOIN on made the most sense to me. As you can see by my notes,
+while some of these values seemed rather easy to calculate, others were
+much harder:
+
+#DisplayName, CreationDate, Location, COUNT(Badges.UserId = Id),
+[???NAMES???], MIN(AcceptedAnswerId.OwnerUserId.CreationDate),
+MAX(AcceptedAnswerId.OwnerUserId.CreationDate), [???UNIQUE TAGS???]
+
+For Names I ended up using GROUP_CONCAT to bring together all the badge
+names from a separate table I made of all the badges each user won.
+
+For Unique Tags I had to use a similar strategy as Names but with the
+tags.
+
+
+```{r Q23}
+
+#MAIN TABLE: Users
+#DisplayName, CreationDate, Location, COUNT(Badges.UserId = Id), [???NAMES???], MIN(AcceptedAnswerId.OwnerUserId.CreationDate), MAX(AcceptedAnswerId.OwnerUserId.CreationDate), [???UNIQUE TAGS???]
+
+#User 6:Harlan has 2 accepted answers via manual checking
+
+kable(dbGetQuery(db, 'SELECT Users.Id, Users.DisplayName, Users.CreationDate, Users.Location, Badges.BadgesWon, Badges.BadgeList, Top75.EarliestAnswer, Top75.LatestAnswer, TT.UnqTags
+           FROM Users
+           INNER JOIN Posts AS p1 ON Users.Id = p1.OwnerUserId
+           INNER JOIN Posts AS p2 ON p1.Id = p2.AcceptedAnswerId
+           INNER JOIN (SELECT OwnerUserId, COUNT(*) AS Freq, MIN(CreationDate) AS EarliestAnswer, MAX(CreationDate) AS LatestAnswer
+                FROM Posts
+                WHERE Id IN (SELECT AcceptedAnswerId FROM Posts WHERE (NOT AcceptedAnswerId = "") OR (NOT AcceptedAnswerId IS NULL)) AND OwnerUserId <> ""
+                GROUP BY OwnerUserId
+                ORDER BY Freq DESC
+                LIMIT 75
+                ) AS Top75 ON Users.Id = Top75.OwnerUserId
+          INNER JOIN (
+                SELECT u.Id, COUNT(*) AS BadgesWon, GROUP_CONCAT(DISTINCT Badges.Name) AS BadgeList
+                FROM Users AS u
+                INNER JOIN Badges ON u.Id = Badges.UserId
+                GROUP BY u.Id
+                ) AS Badges ON Users.Id = Badges.Id
+		LEFT JOIN (
+				SELECT DISTINCT p.Id, t.Id, p.AcceptedAnswerId, a.Id, a.OwnerUserId, GROUP_CONCAT(DISTINCT t.Tag) AS UnqTags
+				FROM Posts AS p
+				INNER JOIN TagPosts AS t ON t.Id = p.Id
+				INNER JOIN Posts AS a ON p.AcceptedAnswerId = a.Id
+				WHERE p.AcceptedAnswerId <> ""
+				GROUP BY a.OwnerUserId
+				) AS TT ON TT.OwnerUserId = Users.Id
+        GROUP BY Users.Id
+        ORDER BY Users.Id
+'))
+
+# The following queries are what I used to "build up" to the final answer
+# They are commented out to avoid unnecessarily filling the output, but to give you an idea of what I did :)
+
+#Select Users with the top 75 Accepted Answers
+# dbGetQuery(db, 'SELECT OwnerUserId, COUNT(*) AS Freq, MIN(CreationDate) AS EarliestAnswer, MAX(CreationDate) AS LatestAnswer
+#                 FROM Posts
+#                 WHERE Id IN (SELECT AcceptedAnswerId FROM Posts WHERE (NOT AcceptedAnswerId = "") OR (NOT AcceptedAnswerId IS NULL)) AND OwnerUserId <> ""
+#                 GROUP BY OwnerUserId
+#                 ORDER BY Freq DESC
+#                 LIMIT 75;
+#                 ')
+
+#User Badges
+#[3] Using Group_Concat to make Strings of columns
+# dbGetQuery(db, 'SELECT u.Id, COUNT(*) AS BadgesWon, GROUP_CONCAT(Badges.Name) AS BadgeList
+#                 FROM Users AS u
+#                 INNER JOIN Badges ON u.Id = Badges.UserId
+#                 GROUP BY u.Id')
+
+#Get Unique tags per post
+#[4] Distinct Tags for questions where they have accepted answer
+# dbGetQuery(db, 'SELECT p.Id, t.Id, p.AcceptedAnswerId, a.Id, a.OwnerUserId, group_concat(t.Tag)
+#           FROM Posts AS p
+#           INNER JOIN TagPosts AS t ON t.Id = p.Id
+#           INNER JOIN Posts AS a ON p.AcceptedAnswerId = a.Id
+#           WHERE p.AcceptedAnswerId <> ""
+#           GROUP BY a.OwnerUserId
+#            ')
+```
+
+**QUESTION 24:** How many questions received no answers (accepted or
+unaccepted)? How many questions had no accepted answer?
+
+For this question I used the AnswerCount to check which questions had no
+answers. Answers without an accepted answer was rather easy, I just
+checked which posts had no AcceptedAnswerId.
+
+```{r Q24}
+#Posts WHERE AnswerCount == 0
+kable(dbGetQuery(db, "SELECT COUNT(AnswerCount) FROM Posts WHERE AnswerCount = 0"), col.names = 'Questions without Answer')
+
+#Verification:
+nonzero = dbGetQuery(db, 'SELECT p.Id, COUNT(*) AS f
+                  FROM Posts AS p
+                  INNER JOIN Posts AS a ON p.Id = a.ParentId
+                  WHERE a.PostTypeId = 2 AND p.PostTypeId = 1
+                  GROUP BY p.Id
+                  HAVING f > 0
+                ')
+allposts = dbGetQuery(db, 'SELECT Id FROM Posts WHERE PostTypeId = 1')
+print(paste('The Number of no answer posts, without using AnswerCount:', nrow(allposts) - nrow(nonzero)))
+
+kable(dbGetQuery(db, 'SELECT COUNT(AcceptedAnswerID) FROM Posts WHERE AcceptedAnswerID =""'), col.names = 'Questions with no accepted answer')
+#Posts where there is a matching AcceptedAnswerID? Linked somehow
+```
+
+**QUESTION 25:** What is the distribution of answers per posted
+question?
+
+This appears to be roughly a Poisson distribution, or following the
+shape of a negative exponential function. The AnswerCount was used for
+these values as in Question 24 we found that values was trustworthy.
+
+```{r Q25}
+ans_count = dbGetQuery(db, 'SELECT AnswerCount, COUNT(*) FROM Posts GROUP BY AnswerCount')
+plot(ans_count$AnswerCount, log(ans_count$`COUNT(*)`))
+```
+
+**QUESTION 26:** What is the length of time for a question to receive an
+answer? to obtaining an accepted answer? (Instructor Note: Make plots!)
+
+I used the CreationDate here to calculate these differences.
+
+Note that we have some negative times in Question vs Accepted Answer. I
+went into the database to confirm this, and it seems like there are two
+posts where the answer is noted before the actual post somehow (Post
+129091-\>129077 and Post 108295-\>109065)
+
+```{r Q26.1}
+#How long until accepted answer
+q26a = dbGetQuery(db, 'SELECT p1.Id, p1.AcceptedAnswerId, p1.CreationDate, p2.CreationDate, (strftime("%s", p2.CreationDate) - strftime("%s", p1.CreationDate))/60 as AnsDif FROM Posts AS p1
+           INNER JOIN Posts AS p2 ON p2.Id = p1.AcceptedAnswerId
+           ORDER BY AnsDif;')
+head(q26a)
+q26a_table = as.data.frame(table(q26a$AnsDif))
+plot(q26a_table$Var1, q26a_table$Freq, xlab = 'Difference (Minutes)', ylab = 'Frequency', main = 'Difference in Post Time & Accepted Answer Post Time')
+```
+
+Note that we have many posts here with negative post to answer times,
+I'm wondering if this is due to editing or something.
+
+```{r Q26.2}
+q26p = dbGetQuery(db, 'SELECT p1.Id, p2.ParentId, p2.Id, p1.CreationDate, p2.CreationDate, (strftime("%s", p2.CreationDate) - strftime("%s", p1.CreationDate))/60 as AnsDif
+          FROM Posts as p1
+          INNER JOIN Posts AS p2 ON p2.ParentId = p1.Id
+          WHERE p2.PostTypeId = 2
+          ORDER BY AnsDif')
+head(q26p)
+q26p_table = as.data.frame(table(q26p$AnsDif))
+plot(q26p_table$Var1, q26p_table$Freq, xlab = 'Difference (Minutes)', ylab = 'Frequency', main = 'Difference in Post Time & Answer Times')
+```
+
+**QUESTION 27:** How many answers are typically received before the
+accepted answer?
+
+Here I used the seconds to calculate the difference, as allowing it to
+all be in the same unit allows for easy math. I used lots of
+verification using DB Browser for SQLite and comparing to the actual
+posts themselves.
+
+```{r Q27}
+
+q27 = dbGetQuery(db, 'SELECT p1.Id, p2.Id AS EarlyPost, ((strftime("%s", p3.CreationDate) - strftime("%s", p2.CreationDate))/60) as Dif, COUNT(*) AS Freq
+          FROM Posts as p1
+          LEFT JOIN Posts AS p2 ON p1.Id = p2.ParentId
+          LEFT JOIN Posts AS p3 ON p1.AcceptedAnswerId = p3.Id
+          WHERE ((strftime("%s", p3.CreationDate) - strftime("%s", p2.CreationDate))/60) > 0
+		      GROUP BY p1.Id')
+
+head(q27)
+q27_table = as.data.frame(table(q27$Freq))
+head(q27_table)
+plot(q27_table$Var1, q27_table$Freq, xlab = 'Difference (Minutes)', ylab = 'Frequency', main = 'Frequency of # of Answers before accepted Answer')
+```
+
+[1]
+<https://learnsql.com/cookbook/how-to-calculate-the-difference-between-two-timestamps-in-sqlite/>
+
+[2]
+<https://rveryday.wordpress.com/2016/11/17/create-a-cumulative-sum-column-in-r/>
+
+[3] <https://www.sqlitetutorial.net/sqlite-group_concat/>
+
+[4] <https://www.sqlitetutorial.net/sqlite-distinct/>
